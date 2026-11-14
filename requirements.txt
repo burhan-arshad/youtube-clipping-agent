@@ -1,0 +1,22 @@
+# Core (all free, all run on CPU)
+numpy>=1.26
+opencv-python-headless>=4.9
+PyYAML>=6.0
+requests>=2.31
+
+# Speech-to-text (captions timing + what the streamer says) - runs locally on CPU
+faster-whisper>=1.0
+
+# Text-to-speech for the voice-over - runs locally on CPU
+kokoro-onnx>=0.4
+soundfile>=0.12
+
+# Download videos you have permission to use (YouTube / Twitch VODs)
+yt-dlp>=2025.1.1
+
+# YouTube upload (only needed for the upload step)
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+
+# Tests
+pytest>=8.0

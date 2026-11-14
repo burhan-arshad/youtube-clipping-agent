@@ -1,0 +1,13 @@
+.venv
+.env
+config.yaml
+sources.yaml
+client_secret.json
+token.json
+work/
+output/
+data/*.db
+__pycache__/
+*.pyc
+.pytest_cache/
+proofs/

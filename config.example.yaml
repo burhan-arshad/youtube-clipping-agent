@@ -1,0 +1,29 @@
+# featureclip settings. Copy to config.yaml. Only write what you want to change;
+# everything else uses the defaults in featureclip/config.py.
+
+game:
+  name: "GTA 6"
+  topic_hint: "open-world action game; show gameplay features, mechanics, details"
+
+layout:
+  mode: fill            # fill = gameplay fills the whole 9:16 screen | hybrid = 4:5 block over blurred background
+
+llm:
+  provider: gemini      # gemini | openai (Groq / OpenRouter / any OpenAI-compatible API)
+  # Check the model names in Google AI Studio; run `doctor --ping` to test them.
+  models: ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+  # daily_limit: {"gemini-2.5-flash": 20}   # optional: stay under the free-tier quota
+
+whisper:
+  model: base.en        # "small.en" is more accurate but slower. Use "base" / "small" for non-English.
+
+audio:
+  game_audio: "off"     # off = no game/streamer audio (safest). duck = very quiet under the voice
+
+review:
+  auto_approve: false   # keep false at launch: you look at every clip before it is uploaded
+
+upload:
+  privacy: private      # change to public only after you checked the first uploads
+  max_per_day: 3
+  # description_footer: "Daily GTA 6 features."
