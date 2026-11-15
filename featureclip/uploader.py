@@ -31,7 +31,7 @@ def build_description(judgement: dict, streamer: str, credit_url: str, cfg) -> s
         credit = f"Gameplay footage: {streamer}"
         if credit_url:
             credit += f" ({credit_url})"
-        lines.append(credit + " - used with permission.")
+        lines.append(credit + "")
     lines.append("Voice-over: AI-generated.")
     footer = cfg.get("upload.description_footer", "").strip()
     if footer:

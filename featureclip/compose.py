@@ -8,11 +8,12 @@ from .ffutil import run
 Box = tuple[int, int, int, int]
 
 
-def video_filter(crop: Box, mode: str, width: int, height: int, fps: int, ass_name: str | None) -> str:
+def video_filter(crop: Box, mode: str, width: int, height: int, fps: int, ass_name: str | None,
+                 block_aspect: float = 0.8) -> str:
     x, y, w, h = crop
     base = f"[0:v]crop={w}:{h}:{x}:{y},setsar=1"
     if mode == "hybrid":
-        block_h = int(width * 5 / 4) // 2 * 2
+        block_h = min(int(width * h / w), 1500) // 2 * 2
         top = int((height - block_h) * 0.35)
         graph = (
             f"{base},split[a][b];"
@@ -28,7 +29,7 @@ def video_filter(crop: Box, mode: str, width: int, height: int, fps: int, ass_na
     return graph + "[v]"
 
 
-def audio_filter(cfg, dur: float, has_game_audio: bool, lead_in: float) -> str:
+def audio_filter(cfg, dur: float, has_game_audio: bool, lead_in: float, music: bool = False) -> str:
     lufs = float(cfg.get("audio.target_lufs", -14))
     lead_ms = int(lead_in * 1000)
     narr = f"[1:a]adelay={lead_ms}|{lead_ms},aresample=48000,apad"
@@ -40,6 +41,15 @@ def audio_filter(cfg, dur: float, has_game_audio: bool, lead_in: float) -> str:
             f"[g][n1]sidechaincompress=threshold=0.04:ratio=10:attack=20:release=350[gd];"
             f"[gd][n2]amix=inputs=2:duration=longest:normalize=0,"
         )
+    elif music:
+        mdb = float(cfg.get("audio.music_db", -22))
+        fo = max(0.0, dur - 1.8)
+        graph = (
+            f"{narr},asplit[n1][n2];"
+            f"[2:a]aresample=48000,volume={mdb}dB,afade=t=in:st=0:d=1.2,afade=t=out:st={fo:.3f}:d=1.8[m0];"
+            f"[m0][n1]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=450[md];"
+            f"[n2][md]amix=inputs=2:duration=longest:normalize=0,"
+        )
     else:
         graph = f"{narr},"
     graph += f"atrim=0:{dur:.3f},loudnorm=I={lufs}:TP=-1.5:LRA=11[a]"
@@ -47,19 +57,26 @@ def audio_filter(cfg, dur: float, has_game_audio: bool, lead_in: float) -> str:
 
 
 def render(video: str | Path, start: float, dur: float, crop: Box, narration_wav: Path,
-           ass_path: Path | None, out_path: Path, cfg, has_game_audio: bool = True) -> Path:
+           ass_path: Path | None, out_path: Path, cfg, has_game_audio: bool = True,
+           music_path: Path | None = None) -> Path:
     """Render one Short. ffmpeg runs inside the clip folder so the ASS filename needs no escaping."""
     out_path = Path(out_path)
     work = ass_path.parent if ass_path else out_path.parent
     width, height = int(cfg.get("video.width")), int(cfg.get("video.height"))
     fps = int(cfg.get("video.fps"))
     vf = video_filter(crop, cfg.get("layout.mode", "fill"), width, height, fps,
-                      ass_path.name if ass_path else None)
-    af = audio_filter(cfg, dur, has_game_audio, float(cfg.get("narration.lead_in", 0.4)))
+                      ass_path.name if ass_path else None,
+                      block_aspect=float(cfg.get("layout.hybrid_aspect", 1.33)))
+    use_music = bool(music_path) and cfg.get("audio.game_audio", "off") != "duck"
+    af = audio_filter(cfg, dur, has_game_audio, float(cfg.get("narration.lead_in", 0.4)), music=use_music)
     cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(video).resolve()),
         "-i", str(Path(narration_wav).resolve()),
+    ]
+    if use_music:
+        cmd += ["-stream_loop", "-1", "-i", str(Path(music_path).resolve())]
+    cmd += [
         "-filter_complex", f"{vf};{af}",
         "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}",
         "-c:v", "libx264", "-preset", cfg.get("video.preset", "veryfast"),

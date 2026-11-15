@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .pipeline import log
+from .sources import resolve_source
 
 
 def stream_urls(url: str, max_height: int = 720) -> list[str]:
@@ -47,8 +48,8 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
           local_test_file: str | None = None, poll: float = 5.0, max_height: int = 720,
           retry_seconds: int = 20, wait_minutes: int = 180) -> int:
     """Blocks until the stream ends (or Ctrl+C). Returns the number of pieces processed."""
-    src = pipe.sources[source_id]
-    src.check_permission()
+    src = resolve_source(source_id, pipe.sources)
+    source_id = src.id
     out_dir = pipe.work / "live" / source_id
     out_dir.mkdir(parents=True, exist_ok=True)
     url = url or src.url

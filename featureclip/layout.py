@@ -95,20 +95,21 @@ def cluster_faces(per_frame: list[list[Box]], n_frames: int, min_presence: float
                     g["n"] += 1
                     g["cx"] = (g["cx"] * (g["n"] - 1) + cx) / g["n"]
                     g["cy"] = (g["cy"] * (g["n"] - 1) + cy) / g["n"]
-                    g["w"] = max(g["w"], w)
-                    g["h"] = max(g["h"], h)
+                    g["w"] = (g["w"] * (g["n"] - 1) + w) / g["n"]
+                    g["h"] = (g["h"] * (g["n"] - 1) + h) / g["n"]
                     break
             else:
                 groups.append({"cx": cx, "cy": cy, "w": w, "h": h, "n": 1})
-    keep = [g for g in groups if g["n"] >= max(2, min_presence * n_frames)]
+    keep = sorted((g for g in groups if g["n"] >= max(2, min_presence * n_frames)), key=lambda g: -g["n"])
     return [(int(g["cx"] - g["w"] / 2), int(g["cy"] - g["h"] / 2), int(g["w"]), int(g["h"])) for g in keep]
 
 
-def facecam_box(face: Box, fw: int, fh: int, grow: float = 2.6, edge_snap: float = 0.18) -> Box:
+def facecam_box(face: Box, fw: int, fh: int, grow: tuple[float, float] = (2.4, 2.0),
+                edge_snap: float = 0.18) -> Box:
     """A webcam window is bigger than the face itself and usually touches a screen edge."""
     x, y, w, h = face
     cx, cy = x + w / 2, y + h / 2
-    bw, bh = w * grow, h * grow
+    bw, bh = w * grow[0], h * grow[1]
     x0, y0 = max(0, cx - bw / 2), max(0, cy - bh / 2)
     x1, y1 = min(fw, cx + bw / 2), min(fh, cy + bh / 2)
     if x0 < edge_snap * fw:
@@ -124,9 +125,93 @@ def facecam_box(face: Box, fw: int, fh: int, grow: float = 2.6, edge_snap: float
 
 # ------------------------------------------------------------------ step 1: layout of the source
 
+DATA = Path(__file__).resolve().parent / "data"
+CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+
+def corner_box(corner: str, fw: int, fh: int, size: tuple[float, float] = (0.27, 0.38)) -> Box:
+    """A fixed facecam area in one corner of the frame (width/height as fractions of the frame)."""
+    w, h = _even(fw * size[0]), _even(fh * size[1])
+    x = 0 if "left" in corner else fw - w
+    y = 0 if "top" in corner else fh - h
+    return (x, y, w, h)
+
+
+def find_faces(gray_frames: list[np.ndarray], frame_w: int) -> list[Box]:
+    """Faces that stay at about the same place (= a facecam). Uses 3 detectors, so a streamer who
+    turns the head or leans back is still found. The cascade files ship with the project."""
+    dets = []
+    for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_frontalface_default.xml",
+                 "haarcascade_profileface.xml"):
+        for path in (DATA / name, Path(getattr(cv2.data, "haarcascades", "")) / name):
+            if path.is_file():
+                d = cv2.CascadeClassifier(str(path))
+                if not d.empty():
+                    dets.append(d)
+                    break
+    if not dets:
+        print("WARNING: no face detector files found, facecam cannot be detected automatically. "
+              "Set layout: {facecam: top-right} in config.yaml.")
+        return []
+    min_size = max(24, int(frame_w * 0.04))
+    per_frame = []
+    for g in gray_frames:
+        found: list[Box] = []
+        for d in dets:
+            for f in d.detectMultiScale(g, scaleFactor=1.1, minNeighbors=4, minSize=(min_size, min_size)):
+                found.append(tuple(int(v) for v in f))
+        per_frame.append(found)
+    fh, fw = gray_frames[0].shape[:2]
+    for (x, y, w, h) in cluster_faces(per_frame, len(gray_frames), min_presence=0.08, frame_w=frame_w):
+        cx, cy = x + w / 2, y + h / 2
+        if not ((cx < 0.3 * fw or cx > 0.7 * fw) and (cy < 0.4 * fh or cy > 0.6 * fh)):
+            continue                      # a webcam sits in a corner; faces in the middle are the game
+        box = facecam_box((x, y, w, h), fw, fh)
+        if box[2] * box[3] > 0.3 * fw * fh:
+            continue
+        return [box]                      # one streamer = one facecam (clusters come most-seen first)
+    return []
+
+
+def _covered(b: Box, L: Layout) -> bool:
+    cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
+    rx, ry, rw, rh = L.rect
+    if not (rx <= cx <= rx + rw and ry <= cy <= ry + rh):
+        return True                                  # outside the gameplay area: already cut away
+    return any(a[0] <= cx <= a[0] + a[2] and a[1] <= cy <= a[1] + a[3] for a in L.avoid)
+
+
+def _add_missed_webcam(L: Layout, video, duration: float) -> Layout:
+    """Safety net: if a real webcam face sits inside the gameplay area but the AI did not box it, add it."""
+    try:
+        times = list(np.linspace(duration * 0.1, duration * 0.9, 10)) if duration > 10 else [duration / 2]
+        frames = sample_frames(video, times, 640)
+        if len(frames) < 4:
+            return L
+        sh, sw = frames[0].shape[:2]
+        sx, sy = L.frame_w / sw, L.frame_h / sh
+        for b in find_faces([cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames], sw):
+            full = (_even(b[0] * sx), _even(b[1] * sy), _even(b[2] * sx), _even(b[3] * sy))
+            if not _covered(full, L):
+                print(f"[layout] a webcam the AI missed was added: {full}")
+                L.avoid.append(full)
+    except Exception:
+        pass
+    return L
+
+
 def detect_layout(video: str | Path, duration: float, frame_w: int, frame_h: int,
                   n_frames: int = 24, face_detect: bool = True,
-                  manual: list[int] | None = None) -> Layout:
+                  manual: list[int] | None = None, facecam: str = "auto",
+                  facecam_size: tuple[float, float] = (0.27, 0.38),
+                  crop_frac: list[float] | None = None, llm=None, tmp: Path | None = None) -> Layout:
+    if llm is not None and not manual and not crop_frac and (facecam or "auto").lower() == "auto":
+        from . import ai_layout
+        L = ai_layout.detect(llm, video, duration, frame_w, frame_h, Path(tmp or Path(video).parent / "layout_tmp"))
+        if L is not None:
+            return _add_missed_webcam(L, video, duration)
+    if crop_frac and not manual:     # gameplay rectangle as fractions of the frame: [x, y, w, h]
+        manual = [crop_frac[0] * frame_w, crop_frac[1] * frame_h, crop_frac[2] * frame_w, crop_frac[3] * frame_h]
     if manual:
         x, y, w, h = [int(v) for v in manual]
         return Layout(frame_w, frame_h, (_even(x), _even(y), _even(w), _even(h)), [], "manual")
@@ -162,16 +247,11 @@ def detect_layout(video: str | Path, duration: float, frame_w: int, frame_h: int
                   rect_small[2] - 2 * pad, rect_small[3] - 2 * pad)
 
     avoid: list[Box] = []
-    if face_detect:
-        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-        if cascade_path.is_file():
-            det = cv2.CascadeClassifier(str(cascade_path))
-            per_frame = []
-            for g in gray.astype(np.uint8):
-                faces = det.detectMultiScale(g, scaleFactor=1.1, minNeighbors=6, minSize=(28, 28))
-                per_frame.append([tuple(int(v) for v in f) for f in faces])
-            for face in cluster_faces(per_frame, len(frames), frame_w=sw):
-                avoid.append(facecam_box(face, sw, sh))
+    facecam = (facecam or "auto").lower()
+    if facecam in CORNERS:                       # the user told us where the webcam is: most reliable
+        avoid.append(corner_box(facecam, sw, sh, facecam_size))
+    elif facecam != "none" and face_detect:
+        avoid.extend(find_faces(list(gray.astype(np.uint8)), sw))
 
     def up(b: Box) -> Box:
         return (_even(b[0] * sx), _even(b[1] * sy), _even(b[2] * sx), _even(b[3] * sy))
@@ -190,7 +270,7 @@ def energy_map(frames: list[np.ndarray]) -> np.ndarray:
     return cv2.GaussianBlur(e, (0, 0), 6)
 
 
-def choose_crop(layout: Layout, energy: np.ndarray | None, aspect: float = 9 / 16,
+def choose_crop(layout: Layout, energy: np.ndarray | None, aspect: "float | tuple[float, float]" = 9 / 16,
                 energy_scale: tuple[float, float] | None = None) -> Box:
     """Pick the crop window (source pixels). aspect = width / height of the window."""
     rects = _exclude([layout.rect], layout.avoid[0]) if layout.avoid else [layout.rect]
@@ -217,12 +297,14 @@ def choose_crop(layout: Layout, energy: np.ndarray | None, aspect: float = 9 / 1
             return 0.0
 
     best, best_score = None, -1.0
+    area_w = 3.0 if isinstance(aspect, tuple) else 0.6      # hybrid: show as much game picture as possible
     rect_area = layout.rect[2] * layout.rect[3]
     for (rx, ry, rw, rh) in rects:
-        if rh * aspect <= rw:
-            ch, cw = rh, rh * aspect
+        asp = min(max(rw / rh, aspect[0]), aspect[1]) if isinstance(aspect, tuple) else aspect
+        if rh * asp <= rw:
+            ch, cw = rh, rh * asp
         else:
-            cw, ch = rw, rw / aspect
+            cw, ch = rw, rw / asp
         cw, ch = _even(cw), _even(ch)
         slack_x, slack_y = rw - cw, rh - ch
         steps = 24
@@ -231,7 +313,7 @@ def choose_crop(layout: Layout, energy: np.ndarray | None, aspect: float = 9 / 1
             x = rx + int(slack_x * fx) if slack_x > 0 else rx
             y = ry + int(slack_y * fx) if slack_y > 0 and slack_x <= 0 else ry
             center_dev = abs(fx - 0.5) * 2 if (slack_x > 0 or slack_y > 0) else 0.0
-            score = e_of(x, y, cw, ch) + 0.6 * (cw * ch / max(rect_area, 1)) + 0.12 * (1 - center_dev)
+            score = e_of(x, y, cw, ch) + area_w * (cw * ch / max(rect_area, 1)) + 0.12 * (1 - center_dev)
             if score > best_score:
                 best_score, best = score, (_even(x), _even(y), cw, ch)
     assert best is not None

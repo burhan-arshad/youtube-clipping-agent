@@ -10,9 +10,8 @@ from .ffutil import probe
 from .sources import Source
 
 
-def ingest(src: Source, workdir: Path) -> Path:
-    """Return the path of the video file for this (permission-checked) source."""
-    src.check_permission()
+def ingest(src: Source, workdir: Path, cfg=None) -> Path:
+    """Return the path of the video file for this source (download it if it is a link)."""
     if src.path:
         p = Path(src.path).expanduser()
         if not p.is_file():
@@ -32,11 +31,22 @@ def ingest(src: Source, workdir: Path) -> Path:
         "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
         "-o", str(dest_dir / "video.%(ext)s"),
-        "--no-playlist", src.url,
+        "--no-playlist", "--retries", "10", "--sleep-requests", "1",
+        "--remote-components", "ejs:github",   # lets yt-dlp solve the YouTube JS challenge (needs deno/node)
     ]
+    browser = (cfg.get("ingest.cookies_from_browser") if cfg else None)
+    cfile = (cfg.get("ingest.cookies_file") if cfg else None)
+    if cfile:     # cookies.txt exported from the browser (see README)
+        cmd += ["--cookies", str(cfile)]
+    elif browser:   # e.g. "chrome" / "edge" / "firefox": helps when YouTube answers 429 / "confirm you're not a bot"
+        cmd += ["--cookies-from-browser", str(browser)]
+    cmd += [src.url]
     proc = subprocess.run(cmd)
     if proc.returncode != 0:
-        raise RuntimeError("yt-dlp failed; update it with: pip install -U yt-dlp")
+        raise RuntimeError(
+            "yt-dlp could not download the video. Try: 1) pip install -U yt-dlp  2) wait a few minutes (YouTube "
+            "429 = too many requests)  3) in config.yaml add  ingest: {cookies_from_browser: chrome}  "
+            "(use the browser where you are logged in to YouTube)")
     files = [f for f in dest_dir.glob("video.*") if f.suffix not in (".part", ".ytdl")]
     if not files:
         raise RuntimeError("yt-dlp finished but no file was found")

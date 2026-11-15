@@ -35,9 +35,9 @@ def word_count(s: str) -> int:
 def target_words(clip_dur: float, cfg) -> tuple[int, int]:
     lead = float(cfg.get("narration.lead_in", 0.4))
     speak = max(4.0, clip_dur - lead - 1.0)
-    wps = float(cfg.get("narration.words_per_second", 2.4))
+    wps = float(cfg.get("narration.words_per_second", 2.5))
     hi = int(speak * wps)
-    lo = int(hi * 0.6)
+    lo = int(hi * 0.85)
     return lo, hi
 
 
@@ -75,12 +75,18 @@ Feature: {judgement['feature_name']}
 What is visible: {judgement['what_happens']}
 Streamer's words (hints only, do not quote them): {transcript.strip() or '(none)'}
 
+Structure (it will be read aloud, so write it like a confident, excited friend talking):
+1. HOOK (first sentence, at most 12 words): a bold claim, a question or a curiosity gap that stops the scroll,
+   for example "Wait, did you notice what just happened here?". It must be true to what is visible.
+2. BODY (2-4 short sentences): what exactly happens, one concrete visible detail per sentence, and why a fan
+   should care. Vary the rhythm. Plain words, no filler, no repeating the hook.
+3. ENDING (last sentence, at most 14 words): a punchy payoff that leaves them thinking, then a question to the
+   viewer that invites comments, for example "Which detail did you spot first?".
 Rules:
-- The first sentence is a hook of at most 12 words that makes people keep watching.
-- Then explain what the feature is and why it is cool, in plain spoken language.
+- The script must fill the clip: it has to run for the whole {clip_dur:.0f} seconds, so write {lo} to {hi} words.
 - Use ONLY the facts above. No invented numbers, dates, names, comparisons or release info.
 - Do not say "I" or "we", do not mention the streamer, no emoji, no hashtags, no "like and subscribe".
-- Between {lo} and {hi} words. Short sentences. It will be read aloud.{fix}
+- Short sentences.{fix}
 
 Return JSON: {{"script": "...", "on_screen_hook": "max 6 words, ALL CAPS"}}"""
         raw = llm.json(prompt, system=SYSTEM, temperature=0.6)

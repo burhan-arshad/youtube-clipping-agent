@@ -1,7 +1,7 @@
 """The whole flow, stage by stage. Every stage is resumable: results are cached in the
 work folder and in SQLite, so a crash or Ctrl+C never loses finished work.
 
-  scan   : permission check -> get video -> signals -> candidate windows
+  scan   : get video -> signals -> candidate windows
   judge  : Whisper on candidates -> LLM (frames + words) -> accept/drop
   build  : crop to gameplay -> script -> voice-over -> captions -> render -> QA -> ready
   upload : only clips that a human approved (or auto_approve=true)
@@ -16,11 +16,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import captions, candidates, compose, judge, layout as lay, narrate, qa, signals, uploader
+from . import captions, candidates, compose, judge, layout as lay, music, narrate, qa, signals, uploader
 from .ffutil import extract_audio_wav, probe
 from .ingest import describe, ingest
 from .llm import LLM, LLMError
-from .sources import Source
+from .sources import Source, resolve_source
 from .store import Store
 from .transcribe import Transcript, transcribe_file
 
@@ -56,11 +56,9 @@ class Pipeline:
     # ------------------------------------------------------------ 1. scan
     def scan(self, source_id: str, path=None) -> int:
         """path: use this local file instead of the source's url/path (live segments)."""
-        if source_id not in self.sources:
-            raise KeyError(f"unknown source '{source_id}' (see sources.yaml)")
-        src = self.sources[source_id]
-        src.check_permission()
-        path = Path(path) if path else ingest(src, self.work)   # ingest also checks permission
+        src = resolve_source(source_id, self.sources)
+        source_id = src.id
+        path = Path(path) if path else ingest(src, self.work, self.cfg)
         info = describe(path)
         vid = self.store.add_video(src.id, str(path), info)
         vdir = self.vdir(vid)
@@ -117,6 +115,13 @@ class Pipeline:
         accepted: list[tuple[int, dict]] = [
             (c["id"], json.loads(c["judgement"])) for c in self.store.clips(video_id, "judged")]
         log(f"judging up to {len(todo)} candidates (stops early once enough good ones are found)")
+        crop = None       # the judge should see what the viewer will see: gameplay only, no webcam/chat
+        try:
+            L = self._layout(video_id, self.sources.get(video["source_id"]))
+            asp = 9 / 16 if self.cfg.get("layout.mode") == "fill" else (1.0, 1.7)
+            crop = lay.choose_crop(L, None, asp)
+        except Exception as e:
+            log(f"  (layout for the judge failed: {e}; the judge sees the full frame)")
         for c in todo:
             if len(accepted) >= int(max_clips * 1.5):
                 break
@@ -124,7 +129,7 @@ class Pipeline:
             try:
                 tr = self._transcript_for(path, c)
                 j = judge.judge_window(self.llm, self.cfg, path, c["start"], c["end"], tr.text,
-                                       c["signal_score"], cd / "frames")
+                                       c["signal_score"], cd / "frames", crop)
             except LLMError as e:
                 log(f"  clip {c['id']}: LLM unavailable -> stopping judge ({e})")
                 break
@@ -174,7 +179,12 @@ class Pipeline:
         L = lay.detect_layout(video["path"], video["duration"], video["width"], video["height"],
                               n_frames=int(self.cfg.get("layout.sample_frames")),
                               face_detect=bool(self.cfg.get("layout.face_detect")),
-                              manual=(src.crop if src else None))
+                              manual=(src.crop if src else None),
+                              facecam=((src.facecam if src and src.facecam else None)
+                                       or self.cfg.get("layout.facecam", "auto")),
+                              facecam_size=tuple(self.cfg.get("layout.facecam_size", [0.27, 0.38])),
+                              crop_frac=self.cfg.get("layout.crop_frac"),
+                              llm=(self.llm if self.cfg.get("layout.ai", True) else None), tmp=vdir / "layout_tmp")
         cache.write_text(json.dumps(L.to_dict()), encoding="utf-8")
         log(f"layout: gameplay area {L.rect} ({L.origin}), avoid boxes: {L.avoid or 'none'}")
         return L
@@ -195,7 +205,7 @@ class Pipeline:
         tr = self._transcript_for(video["path"], c)
 
         L = self._layout(video["id"], src)
-        aspect = 9 / 16 if g("layout.mode") == "fill" else 4 / 5
+        aspect = 9 / 16 if g("layout.mode") == "fill" else (1.0, 1.7)
         frames = lay.sample_frames(video["path"], list(np.linspace(start, start + dur, 8)), 640)
         energy = lay.energy_map(frames) if len(frames) >= 2 else None
         crop = lay.choose_crop(L, energy, aspect)
@@ -216,6 +226,8 @@ class Pipeline:
             if n.duration + lead > new_dur - 0.2:
                 raise ValueError(f"voice-over ({n.duration:.1f}s) does not fit the clip ({dur:.1f}s)")
             dur = new_dur
+        elif need < dur - 1.0:  # the voice-over is shorter than the clip: end the clip right after it
+            dur = max(need, float(g("video.clip_floor", 10)))
 
         words = n.words
         if g("captions.align", "auto") in ("auto", "whisper"):
@@ -227,8 +239,13 @@ class Pipeline:
             ass = captions.write_ass(cd / "captions.ass", words, hook, self.cfg, offset=lead)
 
         final = cd / "final.mp4"
+        try:
+            track = music.pick_track(self.cfg, self.work, f"{video['id']}-{clip_id}", self.cfg.root)
+        except Exception as e:
+            log(f"  (no background music: {e})")
+            track = None
         compose.render(video["path"], start, dur, crop, wav, ass, final, self.cfg,
-                       has_game_audio=probe(video["path"])["has_audio"])
+                       has_game_audio=probe(video["path"])["has_audio"], music_path=track)
         result = qa.run_qa(final, self.cfg)
         self.store.update_clip(clip_id, qa=result)
         if not result["ok"]:

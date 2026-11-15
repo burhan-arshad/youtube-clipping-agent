@@ -71,6 +71,8 @@ class LLM:
         self._now = now
         self._cool: dict[str, float] = {}      # model -> time when usable again
         self._dead: set[str] = set()           # models that returned 400/404 this session
+        self._extra: list[str] = []            # models found by auto-discovery
+        self._discovered = False
         self.provider = cfg.get("llm.provider", "gemini")
         self.timeout = int(cfg.get("llm.timeout", 90))
         self.gemini_base = cfg.get("llm.gemini_base_url", "https://generativelanguage.googleapis.com")
@@ -79,7 +81,36 @@ class LLM:
     def models(self) -> list[str]:
         if self.provider == "openai":
             return list(self.cfg.get("llm.openai_models", []))
-        return list(self.cfg.get("llm.models", []))
+        return list(self.cfg.get("llm.models", [])) + self._extra
+
+    def discover(self) -> bool:
+        """Ask Google which Gemini models this key can use today (model names change often)."""
+        self._discovered = True
+        if self.provider != "gemini":
+            return False
+        try:
+            r = requests.get(f"{self.gemini_base}/v1beta/models", params={"pageSize": 200}, headers={"x-goog-api-key": self.key()},
+                             timeout=30)
+            r.raise_for_status()
+            found = []
+            for m in r.json().get("models", []):
+                name = m.get("name", "").split("/")[-1]
+                if ("generateContent" in m.get("supportedGenerationMethods", []) and "flash" in name
+                        and not any(x in name for x in ("image", "tts", "live", "audio", "embedding",
+                                                        "thinking", "robotics", "computer", "learn"))
+                        and name not in self.models() and name not in self._dead):
+                    found.append(name)
+
+            def rank(n: str):
+                import re
+                v = re.search(r"(\d+(?:\.\d+)?)", n)
+                return (-(float(v.group(1)) if v else 0), "lite" in n, "preview" in n or "exp" in n, n)
+            self._extra = sorted(found, key=rank)[:4]
+            if self._extra:
+                print(f"[llm] configured models are gone; using discovered models: {self._extra}")
+            return bool(self._extra)
+        except Exception:
+            return False
 
     def key(self) -> str:
         return self.cfg.openai_key if self.provider == "openai" else self.cfg.gemini_key
@@ -126,6 +157,8 @@ class LLM:
                         last_err = f"{model}: {type(e).__name__}: {e}"
                         self._sleep(1.0)
                         continue
+            if not self._discovered and self._dead and self.discover():
+                continue                       # new models found -> try them
             if tried_any:
                 # every usable model failed this round
                 raise LLMError(f"all models failed; last error: {last_err}")

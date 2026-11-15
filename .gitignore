@@ -11,3 +11,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 proofs/
+cookies.txt
+layout.png

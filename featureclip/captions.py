@@ -17,6 +17,29 @@ def _esc(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+def fit_hook(text: str, width: int, base_size: int, max_lines: int = 3) -> tuple[str, int]:
+    """Break the hook into lines and pick a font size so that every line fits inside the frame."""
+    words = text.split()
+    usable = width - 160                        # side margins
+    char_w = 0.64                               # width of a bold capital relative to the font size
+    size = base_size
+    while True:
+        per_line = max(6, int(usable / (char_w * size)))
+        lines, cur = [], ""
+        for w in words:
+            if cur and len(cur) + 1 + len(w) > per_line:
+                lines.append(cur)
+                cur = w
+            else:
+                cur = f"{cur} {w}".strip()
+        if cur:
+            lines.append(cur)
+        longest = max((len(x) for x in lines), default=0)
+        if (len(lines) <= max_lines and longest <= per_line) or size <= 40:
+            return "\\N".join(lines), size
+        size = int(size * 0.9)
+
+
 def build_ass(words: list[tuple[float, float, str]], hook: str, cfg, offset: float = 0.0) -> str:
     w, h = int(cfg.get("video.width")), int(cfg.get("video.height"))
     font = cfg.get("captions.font")
@@ -26,21 +49,22 @@ def build_ass(words: list[tuple[float, float, str]], hook: str, cfg, offset: flo
     hook_secs = float(cfg.get("captions.hook_seconds", 2.6))
 
     lines = [
-        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}", "WrapStyle: 2",
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}", "WrapStyle: 0",
         "ScaledBorderAndShadow: yes", "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
         "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Cap,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,2,60,60,{margin_v},1",
-        f"Style: Hook,{font},{int(size * 1.15)},&H0000E6FF,&H0000E6FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,3,8,60,60,230,1",
+        f"Style: Hook,{font},{int(size * 1.15)},&H0000E6FF,&H0000E6FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,3,8,60,60,110,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if hook.strip():
+        htxt, hsize = fit_hook(_esc(hook.strip().upper()), w, int(size * 1.15))
         lines.append(f"Dialogue: 1,{_t(offset)},{_t(offset + hook_secs)},Hook,,0,0,0,,"
-                     f"{{\\fad(150,200)}}{_esc(hook.strip().upper())}")
+                     f"{{\\fs{hsize}\\fad(150,200)}}{htxt}")
     chunks = [words[i:i + per] for i in range(0, len(words), per)]
     for ci, chunk in enumerate(chunks):
         for wi, (s, e, _w) in enumerate(chunk):

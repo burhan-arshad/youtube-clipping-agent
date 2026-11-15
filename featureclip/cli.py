@@ -74,8 +74,7 @@ def cmd_doctor(args) -> int:
     sources = load_sources(cfg.root / "sources.yaml")
     print(f"Sources: {len(sources)}")
     for s in sources.values():
-        good = s.permission == "granted" and bool(s.permission_proof.strip())
-        print(("  OK   " if good else "  WAIT ") + f"{s.id} ({s.streamer}): permission={s.permission}")
+        print(f"  OK   {s.id} ({s.streamer or '-'})")
     if args.ping:
         from .llm import LLM
         try:
@@ -104,7 +103,8 @@ def cmd_make_test_video(args) -> int:
 
 SELFTEST_SCRIPT = ("Wait, look at what this car just did. The front folds inward on impact. "
                    "The glass cracks across the windshield. Every crash looks different. "
-                   "It is a small detail that makes the world feel real.")
+                   "The metal bends in a new way each time. It is a small detail that makes "
+                   "the whole world feel real. Which detail did you spot first?")
 
 
 class _CannedLLM:
@@ -140,6 +140,7 @@ def cmd_selftest(args) -> int:
     cfg.data["detect"]["skip_start"] = 10
     cfg.data["video"]["clip_min"], cfg.data["video"]["clip_max"] = 15, 30
     cfg.data["captions"]["align"] = "script"
+    cfg.data["layout"]["ai"] = False
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
     from make_test_video import make
     vid_path = root / "stream.mp4"
@@ -152,8 +153,7 @@ def cmd_selftest(args) -> int:
     store.close()
     (root / "selftest.db").unlink(missing_ok=True)
     store = Store(root / "selftest.db")
-    src = Source(id="selftest", streamer="TestStreamer", permission="granted",
-                 permission_proof="synthetic video", path=str(vid_path), credit_url="https://example.test")
+    src = Source(id="selftest", streamer="TestStreamer", path=str(vid_path), credit_url="https://example.test")
     p = pl.Pipeline(cfg, store, {"selftest": src}, _CannedLLM())
     print("2/4 running the pipeline (first time it downloads the voice model ~120 MB) ...")
     vid = p.run("selftest")
@@ -227,13 +227,32 @@ def cmd_layout(args) -> int:
     import cv2
     from . import layout as lay
     from .ffutil import probe
+    from .llm import LLM
+    if args.video.lower().startswith(("http://", "https://")):
+        from .ingest import ingest
+        from .sources import resolve_source
+        cfg0 = load_config(args.config, root=args.root)
+        src = resolve_source(args.video, {})
+        print("downloading the video first (once; it is reused by `run`) ...")
+        args.video = str(ingest(src, cfg0.path("paths.workdir"), cfg0))
+    if not Path(args.video).is_file():
+        print(f"File not found: {args.video}\n"
+              "Write the REAL path of a video (e.g. D:\\videos\\gta.mp4), not the word video.mp4.\n"
+              "Tip: drag the video file into the terminal window and its path is typed for you.")
+        return 1
     info = probe(args.video)
     cfg = load_config(args.config, root=args.root)
     L = lay.detect_layout(args.video, info["duration"], info["width"], info["height"],
                           n_frames=int(cfg.get("layout.sample_frames")),
-                          face_detect=bool(cfg.get("layout.face_detect")))
+                          face_detect=bool(cfg.get("layout.face_detect")),
+                          facecam=args.facecam or cfg.get("layout.facecam", "auto"),
+                          facecam_size=tuple(cfg.get("layout.facecam_size", [0.27, 0.38])),
+                          crop_frac=cfg.get("layout.crop_frac"),
+                          llm=(LLM(cfg) if cfg.get("layout.ai", True) else None),
+                          tmp=cfg.path("paths.workdir") / "layout_tmp")
     frames = lay.sample_frames(args.video, [info["duration"] * f for f in (0.3, 0.4, 0.5, 0.6)], 640)
-    crop = lay.choose_crop(L, lay.energy_map(frames) if len(frames) > 1 else None)
+    aspect = 9 / 16 if cfg.get("layout.mode") == "fill" else (1.0, 1.7)
+    crop = lay.choose_crop(L, lay.energy_map(frames) if len(frames) > 1 else None, aspect)
     img = lay.draw_debug(frames[len(frames) // 2], L, crop)
     out = Path(args.out)
     cv2.imwrite(str(out), img)
@@ -261,6 +280,21 @@ def cmd_retry(args) -> int:
     for i in args.ids:
         store.update_clip(i, status="judged", error=None, script=None)
         log(f"clip {i}: reset to 'judged' (run build again)")
+    return 0
+
+
+def cmd_rejudge(args) -> int:
+    """Judge + build an already scanned video again (after the rules or the layout code improved)."""
+    _, store, _, p = _setup(args)
+    n = 0
+    for c in store.clips(args.video_id):
+        if c["status"] in ("dropped", "judged", "error", "candidate"):
+            store.update_clip(c["id"], status="candidate", judgement=None, error=None, script=None)
+            n += 1
+    (p.vdir(args.video_id) / "layout.json").unlink(missing_ok=True)
+    log(f"video {args.video_id}: {n} windows are judged again")
+    p.judge(args.video_id)
+    p.build(args.video_id)
     return 0
 
 
@@ -297,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--seconds", type=int, default=90)
     t.set_defaults(fn=cmd_make_test_video)
     for name, fn, arg, hlp in [
-        ("scan", cmd_scan, "source", "permission check, signals, candidate windows"),
+        ("scan", cmd_scan, "source", "signals + candidate windows (source = name, link or video file)"),
         ("judge", cmd_judge, "video_id", "Whisper + LLM decide which windows show a feature"),
         ("build", cmd_build, "video_id", "voice-over, captions, vertical render, QA"),
         ("run", cmd_run, "source", "scan + judge + build"),
@@ -320,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     lo = sub.add_parser("layout", help="draw the detected gameplay area / crop on a frame")
     lo.add_argument("video")
     lo.add_argument("--out", default="layout_debug.png")
+    lo.add_argument("--facecam", default=None, help="top-left | top-right | bottom-left | bottom-right | none")
     lo.set_defaults(fn=cmd_layout)
     a = sub.add_parser("approve", help="approve ready clips for upload")
     a.add_argument("ids", type=int, nargs="*")
@@ -329,6 +364,9 @@ def main(argv: list[str] | None = None) -> int:
         s = sub.add_parser(name)
         s.add_argument("ids", type=int, nargs="+")
         s.set_defaults(fn=fn)
+    rj = sub.add_parser("rejudge", help="judge + build a scanned video again with the newest rules")
+    rj.add_argument("video_id", type=int)
+    rj.set_defaults(fn=cmd_rejudge)
     u = sub.add_parser("upload", help="upload approved clips to YouTube")
     u.add_argument("--limit", type=int, default=None)
     u.add_argument("--dry-run", action="store_true")
@@ -340,9 +378,6 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         return int(args.fn(args) or 0)
-    except PermissionError as e:
-        print(f"\nPERMISSION GATE: {e}")
-        return 2
     except Exception as e:
         print(f"\nERROR: {type(e).__name__}: {e}")
         return 1

@@ -64,14 +64,15 @@ def extract_audio_wav(src: str | Path, dst: str | Path, start: float | None = No
     return Path(dst)
 
 
-def grab_frame(src: str | Path, t: float, dst: str | Path, width: int = 640) -> Path:
+def grab_frame(src: str | Path, t: float, dst: str | Path, width: int = 640, crop=None) -> Path:
     """One frame at t. If t is at/after the end (or the seek fails) step back until a frame exists."""
     dst = Path(dst)
     for back in (0.0, 0.5, 1.5, 3.0, 6.0):
         dst.unlink(missing_ok=True)
         run([
             "ffmpeg", "-y", "-v", "error", "-ss", f"{max(t - back, 0):.3f}", "-i", str(src),
-            "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "4", str(dst),
+            "-frames:v", "1", "-vf", (f"crop={crop[2]}:{crop[3]}:{crop[0]}:{crop[1]}," if crop else "") + f"scale={width}:-2",
+            "-q:v", "4", str(dst),
         ], check=False)
         if dst.is_file() and dst.stat().st_size > 0:
             return dst

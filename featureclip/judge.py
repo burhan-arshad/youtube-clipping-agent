@@ -29,16 +29,24 @@ def build_prompt(game: str, topic_hint: str, transcript: str, window_len: float,
     times = ", ".join(f"{t:.0f}s" for t in frame_times)
     tr = transcript.strip() or "(no transcript available)"
     return f"""Game: {game} ({topic_hint}).
-You see {len(frame_times)} frames taken at {times} from a {window_len:.0f}-second gameplay recording window.
+You see {len(frame_times)} frames taken at {times} from a {window_len:.0f}-second window of a recording.
+The frames already show only the game picture. The footage can be live gameplay, a trailer or a first-reaction
+stream: whatever it is, your job is to find the BEST thing in this window for a "{game} features" Short.
 What the streamer said in this window (automatic transcript, may contain mistakes):
 \"\"\"{tr}\"\"\"
 Automatic excitement score for the window (louder/more action = higher): {signal_score:.1f}
 
-Decide whether this window shows ONE concrete gameplay feature, mechanic or interesting detail that a viewer
-would find cool and that one short voice-over can explain. Be strict: ordinary driving/walking/shooting with
-nothing special is "nothing_notable".
+Pick ONE concrete feature, mechanic or detail that a game fan would find cool and that one short voice-over can
+explain. Be generous, not strict: lighting/graphics/weather detail, character or crowd animation, NPC behaviour,
+physics, vehicles and driving, weapons, world detail, the map, interface, a new mechanic: all of these count.
+Name it honestly from what is VISIBLE; never invent facts.
+Say feature_shown=false ONLY if the frames show a menu, loading screen, black/blank screen, or nothing but a
+static image or a talking face.
+Not allowed: glitches/exploits, mods/cheats. Cinematic scenes and trailers are fine when they clearly show a
+visual or gameplay feature, but do not retell the story (no plot spoilers).
 
-Never accept: cutscenes or story moments (spoilers), glitches/exploits, mods/cheats, menus/lobbies/loading screens.
+How to score: "confidence" = how sure you are about what is shown (0-100). "interest" = how cool this is for a
+general gaming audience: a normal good-looking moment is 45-60, something special 70+, something amazing 85+.
 
 Allowed categories: {cats}
 
@@ -48,8 +56,8 @@ Return JSON with exactly these keys:
  "category": one of the allowed categories,
  "feature_name": "3-6 words naming the feature, e.g. 'Realistic car damage'",
  "what_happens": "1-2 sentences describing only what is visible or said",
- "confidence": 0-100 (how sure you are that this feature is really shown),
- "interest": 0-100 (how interesting for a general gaming audience),
+ "confidence": 0-100,
+ "interest": 0-100,
  "hook_title": "max 7 words, curiosity-driven, no clickbait lies, no emoji",
  "start_offset": seconds from window start where the clip should begin,
  "end_offset": seconds from window start where it should end (clip length {clip_min:.0f}-{clip_max:.0f}s),
@@ -57,13 +65,14 @@ Return JSON with exactly these keys:
 }}"""
 
 
-def grab_keyframes(video: str, start: float, end: float, n: int, width: int, tmp: Path) -> tuple[list[bytes], list[float]]:
+def grab_keyframes(video: str, start: float, end: float, n: int, width: int, tmp: Path,
+                   crop=None) -> tuple[list[bytes], list[float]]:
     tmp.mkdir(parents=True, exist_ok=True)
     times = [start + (end - start) * (i + 0.5) / n for i in range(n)]
     imgs: list[bytes] = []
     for i, t in enumerate(times):
         p = tmp / f"kf_{i}.jpg"
-        grab_frame(video, t, p, width)
+        grab_frame(video, t, p, width, crop)
         imgs.append(p.read_bytes())
     return imgs, [t - start for t in times]
 
@@ -104,7 +113,10 @@ def decide(j: dict, cfg) -> tuple[bool, str]:
     """Hard rules, applied in code no matter what the model says."""
     if not j["feature_shown"]:
         return False, "no feature shown"
-    if j["category"] in set(cfg.get("judge.reject_categories", [])):
+    rejected = set(cfg.get("judge.reject_categories", []))
+    if cfg.get("judge.allow_cutscenes", True):       # trailers / cinematic footage are fine
+        rejected.discard("cutscene")
+    if j["category"] in rejected:
         return False, f"rejected category: {j['category']}"
     if not j["feature_name"] or not j["what_happens"]:
         return False, "missing feature description"
@@ -116,12 +128,12 @@ def decide(j: dict, cfg) -> tuple[bool, str]:
 
 
 def judge_window(llm, cfg, video: str, start: float, end: float, transcript: str,
-                 signal_score: float, tmp: Path) -> dict:
+                 signal_score: float, tmp: Path, crop=None) -> dict:
     window_len = end - start
     images, times = [], []
     if cfg.get("llm.vision", True):
         images, times = grab_keyframes(video, start, end, int(cfg.get("llm.frames", 4)),
-                                       int(cfg.get("llm.frame_width", 640)), tmp)
+                                       int(cfg.get("llm.frame_width", 640)), tmp, crop)
     else:
         times = [window_len / 2]
     prompt = build_prompt(

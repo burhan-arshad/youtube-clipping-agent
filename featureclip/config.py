@@ -35,6 +35,9 @@ DEFAULTS: dict[str, Any] = {
         "mode": "fill",
         "sample_frames": 24,
         "face_detect": True,
+        "ai": True,                 # let the vision model (Gemini) find webcam / chat / text to cut away
+        "facecam": "auto",          # auto | top-left | top-right | bottom-left | bottom-right | none
+        "facecam_size": [0.27, 0.38],   # width, height of the corner area as a fraction of the frame
     },
     "detect": {
         "sample_fps": 2,
@@ -56,7 +59,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "llm": {
         "provider": "gemini",   # gemini | openai (any OpenAI-compatible API: Groq, OpenRouter...)
-        "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+        "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite"],
         "gemini_base_url": "https://generativelanguage.googleapis.com",
         "openai_base_url": "https://api.groq.com/openai/v1",
         "openai_models": [],
@@ -68,19 +71,20 @@ DEFAULTS: dict[str, Any] = {
         "daily_limit": {},      # e.g. {"gemini-2.5-flash": 20}
     },
     "judge": {
-        "min_confidence": 60,
-        "min_interest": 55,
+        "min_confidence": 45,
+        "min_interest": 40,
+        "allow_cutscenes": True,     # trailers / cinematic footage may be used (plot retelling is still not allowed)
         "max_clips_per_video": 8,
         "reject_categories": [
-            "cutscene", "story_spoiler", "glitch_exploit", "mod_or_cheat",
+            "story_spoiler", "glitch_exploit", "mod_or_cheat",
             "menu_or_lobby", "nothing_notable",
         ],
     },
     "narration": {
         "engine": "kokoro",     # kokoro | dummy (tests only)
-        "voice": "af_heart",
+        "voice": "bm_fable",
         "speed": 1.0,
-        "lang": "en-us",
+        "lang": "en-gb",
         "words_per_second": 2.4,
         "lead_in": 0.4,         # seconds of silence before the voice starts
         "max_speedup": 1.15,
@@ -92,6 +96,9 @@ DEFAULTS: dict[str, Any] = {
         "game_audio": "off",
         "duck_db": -22,
         "target_lufs": -14,
+        "music": True,                  # royalty-free background music (made by this program, no copyright)
+        "music_db": -22,                # music level before it is ducked under the voice
+        "music_dir": "music",           # optional: put your own licensed .mp3/.wav files here, they are used first
     },
     "captions": {
         "enabled": True,
