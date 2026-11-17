@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Turn permitted gameplay recordings into vertical feature Shorts with an AI voice-over"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.26", "opencv-python-headless>=4.9", "PyYAML>=6.0", "requests>=2.31",
+    "numpy>=1.26", "opencv-python-headless>=4.9,<5", "PyYAML>=6.0", "requests>=2.31",
     "faster-whisper>=1.0", "kokoro-onnx>=0.4", "soundfile>=0.12", "yt-dlp>=2025.1.1",
-    "google-api-python-client>=2.100", "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.100", "google-auth-oauthlib>=1.2", "fastapi>=0.110", "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +20,11 @@ test = ["pytest>=8.0"]
 featureclip = "featureclip.cli:main"
 
 [tool.setuptools]
-packages = ["featureclip"]
+packages = ["featureclip", "featureclip.web"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+featureclip = ["data/*.xml", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

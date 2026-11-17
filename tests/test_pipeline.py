@@ -14,9 +14,10 @@ from featureclip.sources import Source
 from featureclip.store import Store
 from featureclip.transcribe import Transcript
 
-SCRIPT = ("Wait, look at what this car just did. The front folds inward on impact. "
+SCRIPT = ("Wait, look at what this car just did in GTA 6. The front folds inward on impact. "
           "The glass cracks across the windshield. Every crash looks different. "
-          "It is a small detail that makes the world feel real.")
+          "The metal bends in a new way each time. It is a small detail that makes "
+          "the whole world feel real. Which detail did you spot first?")
 
 
 class ScriptedLLM:
@@ -35,10 +36,18 @@ class ScriptedLLM:
             assert images, "vision frames must be sent to the judge"
             if self.judged <= 2:
                 return {"feature_shown": True, "category": "vehicle", "confidence": 90, "interest": 80,
-                        "feature_name": f"Realistic car damage {self.judged}", "start_offset": 6,
+                        "feature_name": f"Realistic car damage {self.judged}",
+                        "visible_evidence": ["the bonnet folds inward", "glass cracks on the screen"],
+                        "real_person_or_overlay_visible": False, "start_offset": 6,
                         "end_offset": 30, "what_happens": "A car crumples on impact.",
                         "hook_title": "Car damage is wild", "reason": "visible"}
             return {"feature_shown": False, "category": "nothing_notable", "confidence": 90, "interest": 5}
+        if "strict quality checker" in prompt:
+            return {"match": 90, "real_person_or_overlay_visible": False, "problems": ""}
+        if "screenshots" in prompt:           # the layout helper: give an unusable answer -> classic detector
+            return {}
+        if "YouTube Shorts metadata" in prompt or "For EACH frame say what is visible" in prompt:   # metadata helper: unusable -> plain builder
+            return {}
         self.script_calls += 1
         return {"script": SCRIPT, "on_screen_hook": "WILD CAR DAMAGE"}
 
@@ -51,8 +60,8 @@ def env(cfg, test_video, monkeypatch):
     cfg.data["video"]["clip_min"] = 15
     cfg.data["video"]["clip_max"] = 30
     store = Store(cfg.path("paths.db"))
-    src = Source(id="synthetic", streamer="TestStreamer", permission="granted",
-                 permission_proof="synthetic test video", path=str(test_video),
+    src = Source(id="synthetic", streamer="TestStreamer",
+                 path=str(test_video),
                  credit_url="https://example.test/@t")
     llm = ScriptedLLM()
     return cfg, store, {"synthetic": src}, llm, pl.Pipeline(cfg, store, {"synthetic": src}, llm)
@@ -100,8 +109,10 @@ def test_review_gate_and_upload_cap(env, monkeypatch):
     assert store.clip(ready[1]["id"])["status"] == "rejected"
 
     uploaded = []
-    monkeypatch.setattr(pl.uploader, "upload_video",
-                        lambda path, body, c: (uploaded.append(body) or ("abc123", "private")))
+    monkeypatch.setattr(pl.uploader, "upload_full",
+                        lambda path, body, c, thumb=None: (uploaded.append(body) or
+                            {"id": "abc123", "privacy": "private", "publish_at": body["status"].get("publishAt"),
+                             "thumb_ok": None, "thumb_error": ""}))
     assert p.upload() == 1
     assert store.clip(ready[0]["id"])["status"] == "uploaded"
     assert store.clip(ready[0]["id"])["youtube_id"] == "abc123"
@@ -112,19 +123,14 @@ def test_review_gate_and_upload_cap(env, monkeypatch):
 def test_daily_cap(env, monkeypatch):
     cfg, store, sources, llm, p = env
     cfg.data["upload"]["max_per_day"] = 1
+    cfg.data.setdefault("schedule", {})["enabled"] = False
     p.run("synthetic")
     p.approve([c["id"] for c in store.clips(status="ready")])
-    monkeypatch.setattr(pl.uploader, "upload_video", lambda path, body, c: ("vid", "private"))
+    monkeypatch.setattr(pl.uploader, "upload_full",
+                        lambda path, body, c, thumb=None: {"id": "vid", "privacy": "private", "publish_at": None,
+                                                           "thumb_ok": None, "thumb_error": ""})
     assert p.upload() == 1
     assert p.upload() == 0                                          # cap reached for today
-
-
-def test_pending_permission_is_refused(env):
-    cfg, store, sources, llm, p = env
-    sources["synthetic"].permission = "pending"
-    with pytest.raises(PermissionError):
-        p.scan("synthetic")
-    assert store.videos() == []                                     # nothing was even registered
 
 
 def test_resume_does_not_redo_work(env, monkeypatch):

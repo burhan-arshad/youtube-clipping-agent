@@ -118,11 +118,14 @@ class _CannedLLM:
         if "Allowed categories" in prompt:
             _CannedLLM.n += 1
             if _CannedLLM.n <= 1:
-                return {"feature_shown": True, "category": "vehicle", "confidence": 90, "interest": 80,
+                return {"visible_evidence": ["the bonnet folds in", "glass cracks"],
+                        "real_person_or_overlay_visible": False, "feature_shown": True, "category": "vehicle", "confidence": 90, "interest": 80,
                         "feature_name": "Realistic car damage", "start_offset": 6, "end_offset": 30,
                         "what_happens": "A car crumples on impact.", "hook_title": "Car damage is wild",
                         "reason": "visible"}
             return {"feature_shown": False, "category": "nothing_notable", "confidence": 90, "interest": 5}
+        if "strict quality checker" in prompt:
+            return {"match": 90, "real_person_or_overlay_visible": False, "problems": ""}
         return {"script": SELFTEST_SCRIPT, "on_screen_hook": "WILD CAR DAMAGE"}
 
 
@@ -298,6 +301,12 @@ def cmd_rejudge(args) -> int:
     return 0
 
 
+def cmd_ui(args) -> int:
+    from .web.app import serve
+    serve(args.root, args.config, port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
 def cmd_upload(args) -> int:
     *_, p = _setup(args)
     p.upload(limit=args.limit, dry_run=args.dry_run)
@@ -364,6 +373,10 @@ def main(argv: list[str] | None = None) -> int:
         s = sub.add_parser(name)
         s.add_argument("ids", type=int, nargs="+")
         s.set_defaults(fn=fn)
+    ui = sub.add_parser("ui", help="open the web page (settings, run, review, upload)")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--no-browser", action="store_true")
+    ui.set_defaults(fn=cmd_ui)
     rj = sub.add_parser("rejudge", help="judge + build a scanned video again with the newest rules")
     rj.add_argument("video_id", type=int)
     rj.set_defaults(fn=cmd_rejudge)

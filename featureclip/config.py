@@ -19,6 +19,20 @@ DEFAULTS: dict[str, Any] = {
         # Used in prompts and in titles. Change it and the tool works for any game.
         "name": "GTA 6",
         "topic_hint": "open-world action game; show gameplay features, mechanics, details",
+        # Things worth looking for. The AI may not know a brand-new game, so tell it what players care about.
+        # Edit freely in Settings; one idea per item.
+        "hints": [
+            "vehicle damage and deformation (dents, broken glass, falling parts, smoke)",
+            "car and bike physics (suspension, drifting, tire smoke, water splashes, crashes)",
+            "NPC behaviour (reactions to the player, phones and filming, fleeing, talking, fighting)",
+            "police behaviour (wanted level, chases, roadblocks, arrests)",
+            "animals and wildlife (alligators, birds, fish, dogs)",
+            "weather, lighting, heat haze, reflections, water, wet surfaces",
+            "crowds, traffic density, city life, beaches, boats, jet skis",
+            "character animation details (footsteps in sand, clothes, hands, faces, swimming)",
+            "weapons: reload, recoil, aiming, cover, shooting reactions, destruction of objects",
+            "interactions: shops, phones, doors, interiors, mini-features, interface elements",
+        ],
     },
     "video": {
         "width": 1080,
@@ -28,6 +42,28 @@ DEFAULTS: dict[str, Any] = {
         "preset": "veryfast",
         "clip_min": 15.0,
         "clip_max": 40.0,
+    },
+    "schedule": {
+        "autotune": "off",                # off | suggest | auto  (learns the best publish times from YouTube views)
+        "pool": ["17:00", "19:00", "21:00", "23:00", "01:00", "03:00", "05:00", "07:00"],
+        # 3 publish slots per day in Pakistan time (PKT): UK/EU evening + US afternoon/evening. See schedule.py.
+        "enabled": True,
+        "slots": ["21:00", "01:00", "05:00"],
+        "max_ahead_days": 3,
+    },
+    "assistant": {
+        "enabled": False,
+        "mode": "auto",                 # auto = approve + schedule by itself; ask = only review, I approve
+        "review_strictness": "normal",  # normal | strict
+        "max_rebuilds": 1,              # how many times it re-makes a clip that failed review
+        "buffer_days": 2,               # notify me when less than this many days of clips are left
+        "check_every_seconds": 60,
+    },
+    "notify": {"ntfy_topic": "", "telegram_chat_id": "", "discord_webhook": "", "email_to": ""},
+    "branding": {
+        # Shown under the heading on every Short (e.g. "@DetailRadar"). Empty = nothing is shown.
+        "handle": "",
+        "name": "",              # channel name written in the description ("Channel: ...")
     },
     "layout": {
         # fill  = gameplay fills the whole 9:16 screen (streamer, facecam, overlays cropped away)
@@ -59,20 +95,23 @@ DEFAULTS: dict[str, Any] = {
     },
     "llm": {
         "provider": "gemini",   # gemini | openai (any OpenAI-compatible API: Groq, OpenRouter...)
-        "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        "models": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],   # free tier: 500 requests/day each
         "gemini_base_url": "https://generativelanguage.googleapis.com",
         "openai_base_url": "https://api.groq.com/openai/v1",
         "openai_models": [],
         "vision": True,
-        "frames": 4,
-        "frame_width": 640,
+        "frames": 8,             # frames the judge sees per window (more = it finds WHEN the feature happens)
+        "frame_width": 512,
         "timeout": 90,
         "max_retries": 2,
         "daily_limit": {},      # e.g. {"gemini-2.5-flash": 20}
     },
     "judge": {
-        "min_confidence": 45,
-        "min_interest": 40,
+        "strictness": "normal",      # loose | normal | strict (sets the two numbers below)
+        "min_confidence": None,
+        "min_interest": None,
+        "require_evidence": True,
+        "min_script_match": 70,
         "allow_cutscenes": True,     # trailers / cinematic footage may be used (plot retelling is still not allowed)
         "max_clips_per_video": 8,
         "reject_categories": [
@@ -81,8 +120,13 @@ DEFAULTS: dict[str, Any] = {
         ],
     },
     "narration": {
-        "engine": "kokoro",     # kokoro | dummy (tests only)
-        "voice": "bm_fable",
+        "engine": "gemini",     # gemini (expressive, free quota) | elevenlabs (optional) | kokoro (offline) | dummy (tests)
+        "gemini_voice": "Fenrir",         # any prebuilt name or an Extended Voice Library id (Settings > Voice lab)
+        "gemini_style": "a real person narrating gameplay live: warm, curious, genuinely excited at the big moment, natural pace",
+        "gemini_models": ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview"],
+        "eleven_voice_id": "",
+        "eleven_model": "eleven_turbo_v2_5",
+        "voice": "bm_fable",               # the offline voice (Kokoro), also used when the cloud voice fails
         "speed": 1.0,
         "lang": "en-gb",
         "words_per_second": 2.4,
@@ -125,7 +169,17 @@ DEFAULTS: dict[str, Any] = {
         "description_footer": "",
         "client_secret": "client_secret.json",
         "token": "token.json",
+        "analytics": False,               # True = also read watch-time/retention (asks you to sign in again once)
+        "manage_videos": False,           # True = lets safe mode pull scheduled videos back to private (sign in again)
     },
+    "insights": {"min_samples": 3, "min_age_hours": 12, "refresh_hours": 3},
+    "cleanup": {
+        "enabled": True,
+        "raw_hours": 12,                  # delete recordings / downloads this old once their clips are made
+        "keep_output_days": 7,            # delete finished mp4 this many days after upload
+        "min_free_gb": 4,                 # below this free space, clean up much more aggressively
+    },
+    "safe": {"auto": True, "fail_streak": 3, "reject_streak": 8},
     "review": {
         # False = a human approves every clip before upload (recommended while launching).
         "auto_approve": False,

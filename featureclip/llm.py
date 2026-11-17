@@ -112,6 +112,27 @@ class LLM:
         except Exception:
             return False
 
+    def _log(self, model: str, ok: bool, err: str = "") -> None:
+        try:
+            if self.store:
+                self.store.log_call(model, ok, "", err)
+        except Exception:
+            pass
+
+    def _persist_cooldown(self, model: str, reason: str, secs: float | None = None) -> None:
+        try:
+            if self.store:
+                self.store.set_cooldown(model, self._now() + (secs if secs is not None else self._cool.get(model, 0) - self._now()), reason)
+        except Exception:
+            pass
+
+    def _stat(self, model: str, kind: str, err: str) -> None:
+        try:
+            if self.store:
+                self.store.bump_stat(model, kind, err)
+        except Exception:
+            pass
+
     def key(self) -> str:
         return self.cfg.openai_key if self.provider == "openai" else self.cfg.gemini_key
 
@@ -135,6 +156,13 @@ class LLM:
                 if limit and self.store and self.store.usage_today(model) >= int(limit):
                     continue
                 cool_until = self._cool.get(model, 0)
+                try:
+                    if self.store:
+                        shared = self.store.cooldowns().get(model)
+                        if shared:
+                            cool_until = max(cool_until, shared["until"])
+                except Exception:
+                    pass
                 if cool_until > self._now():
                     soonest = cool_until if soonest is None else min(soonest, cool_until)
                     continue
@@ -144,17 +172,26 @@ class LLM:
                         text = self._call(model, prompt, system, images, temperature)
                         if self.store:
                             self.store.bump_usage(model)
+                            self._log(model, True)
                         return extract_json(text)
-                    except _RateLimited:
-                        self._cool[model] = self._now() + 60
+                    except _RateLimited as e:
+                        self._stat(model, "rate_limited", "HTTP 429 (daily quota used up)" if e.daily else "HTTP 429 (free-tier rate limit)")
+                        self._cool[model] = self._now() + (3600 if e.daily else 60)    # next model is tried at once
+                        self._log(model, False, "429 daily quota" if e.daily else "429 rate limit")
+                        self._persist_cooldown(model, "daily quota used up" if e.daily else "rate limit (per minute)")
                         last_err = f"{model}: rate limited"
                         break
                     except _Dead as e:
+                        self._stat(model, "errors", str(e))
+                        self._log(model, False, str(e)[:120])
+                        self._persist_cooldown(model, "model not available: " + str(e)[:80], 3600)
                         self._dead.add(model)
                         last_err = f"{model}: {e}"
                         break
                     except (_Transient, ValueError, requests.RequestException) as e:
                         last_err = f"{model}: {type(e).__name__}: {e}"
+                        self._stat(model, "errors", last_err)
+                        self._log(model, False, last_err[:120])
                         self._sleep(1.0)
                         continue
             if not self._discovered and self._dead and self.discover():
@@ -218,7 +255,7 @@ class LLM:
     @staticmethod
     def _check(r: requests.Response) -> None:
         if r.status_code == 429:
-            raise _RateLimited()
+            raise _RateLimited("PerDay" in r.text or "per day" in r.text.lower())
         if r.status_code in (400, 401, 403, 404):
             raise _Dead(f"HTTP {r.status_code}: {r.text[:200]}")
         if r.status_code >= 500:
@@ -227,7 +264,9 @@ class LLM:
 
 
 class _RateLimited(Exception):
-    pass
+    def __init__(self, daily: bool = False):
+        super().__init__("rate limited")
+        self.daily = daily
 
 
 class _Dead(Exception):

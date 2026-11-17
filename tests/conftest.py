@@ -25,4 +25,5 @@ def cfg(tmp_path):
     c.data["detect"]["skip_start"] = 10
     c.data["narration"]["engine"] = "dummy"
     c.data["whisper"]["model"] = "tiny.en"
+    c.data["audio"]["music"] = False      # music has its own tests
     return c

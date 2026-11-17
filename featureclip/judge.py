@@ -24,29 +24,46 @@ SYSTEM = (
 
 
 def build_prompt(game: str, topic_hint: str, transcript: str, window_len: float,
-                 frame_times: list[float], signal_score: float, clip_min: float, clip_max: float) -> str:
+                 frame_times: list[float], signal_score: float, clip_min: float, clip_max: float,
+                 hints: list[str] | None = None) -> str:
     cats = ", ".join(CATEGORIES)
     times = ", ".join(f"{t:.0f}s" for t in frame_times)
     tr = transcript.strip() or "(no transcript available)"
+    hint_txt = "\n".join(f"- {h}" for h in (hints or []))
+    hint_block = (f"\nThings viewers of this game care about (look for these, but only report what you really see):\n{hint_txt}\n"
+                  if hint_txt else "")
     return f"""Game: {game} ({topic_hint}).
 You see {len(frame_times)} frames taken at {times} from a {window_len:.0f}-second window of a recording.
-The frames already show only the game picture. The footage can be live gameplay, a trailer or a first-reaction
-stream: whatever it is, your job is to find the BEST thing in this window for a "{game} features" Short.
-What the streamer said in this window (automatic transcript, may contain mistakes):
+The frames are already cropped to the game picture. Decide whether this window shows ONE specific, visible
+{game} feature that a short voice-over can explain, and if so, name it.
+
+{hint_block}
+The frames are numbered in time order (frame 1 is the earliest). Study how the picture CHANGES from frame to frame:
+the feature is usually something that happens between two frames (a crash, a reaction, an animal appearing).
+The streamer's words below are only a weak hint (they often talk about unrelated things). Trust the FRAMES.
 \"\"\"{tr}\"\"\"
 Automatic excitement score for the window (louder/more action = higher): {signal_score:.1f}
 
-Pick ONE concrete feature, mechanic or detail that a game fan would find cool and that one short voice-over can
-explain. Be generous, not strict: lighting/graphics/weather detail, character or crowd animation, NPC behaviour,
-physics, vehicles and driving, weapons, world detail, the map, interface, a new mechanic: all of these count.
-Name it honestly from what is VISIBLE; never invent facts.
-Say feature_shown=false ONLY if the frames show a menu, loading screen, black/blank screen, or nothing but a
-static image or a talking face.
-Not allowed: glitches/exploits, mods/cheats. Cinematic scenes and trailers are fine when they clearly show a
+IS a feature (you can point at it in the frames): vehicle damage or physics, NPC reactions or behaviour, crowd
+density, weather or lighting changes, water, reflections or other graphics detail, character animation details,
+weapon handling, an interaction or mechanic, an interface element, a notable area or landmark of the map, animals.
+IS NOT a feature (set feature_shown=false): ordinary driving, walking or standing with nothing special, plain
+scenery, people only talking, menus, loading or black screens, a static image, a webcam or reaction, chat, text or
+logos, a loud moment whose cause you cannot see.
+Not allowed at all: glitches/exploits, mods/cheats. Cinematic scenes and trailers are fine when they clearly show a
 visual or gameplay feature, but do not retell the story (no plot spoilers).
 
-How to score: "confidence" = how sure you are about what is shown (0-100). "interest" = how cool this is for a
-general gaming audience: a normal good-looking moment is 45-60, something special 70+, something amazing 85+.
+Proof rule: "visible_evidence" must list 2-3 short, concrete things you actually SEE in the frames that prove the
+feature (for example "the car bonnet crumples after hitting the wall"). If you cannot write two concrete items,
+set feature_shown=false.
+"timeline": one entry per frame in order, so that the exact moment can be found later.
+"key_moment_offset": the second (counted from the window start) at which the feature actually HAPPENS or becomes
+visible, estimated from the frame times above (for a crash: the second of the impact, not the driving before it).
+"real_person_or_overlay_visible": true if ANY frame shows a real person (webcam, streamer, a photographed face),
+a chat window, a donation/subscriber alert, or text/logos added by the streamer. Game characters do not count.
+
+Scoring: "confidence" = how sure you are about what is shown (0-100). "interest" = how cool it is for a general
+gaming audience: ordinary 20-40, decent 45-60, clearly cool 65-80, amazing 85+. Most windows score under 50.
 
 Allowed categories: {cats}
 
@@ -55,26 +72,42 @@ Return JSON with exactly these keys:
  "feature_shown": true/false,
  "category": one of the allowed categories,
  "feature_name": "3-6 words naming the feature, e.g. 'Realistic car damage'",
- "what_happens": "1-2 sentences describing only what is visible or said",
+ "what_happens": "1-2 sentences describing only what is visible",
+ "visible_evidence": ["concrete thing 1", "concrete thing 2"],
+ "timeline": [{{"frame": 1, "what": "what is visible in frame 1 (max 15 words)"}}, ...one per frame],
+ "key_moment_offset": seconds from window start when the feature happens,
+ "real_person_or_overlay_visible": true/false,
  "confidence": 0-100,
  "interest": 0-100,
  "hook_title": "max 7 words, curiosity-driven, no clickbait lies, no emoji",
- "start_offset": seconds from window start where the clip should begin,
- "end_offset": seconds from window start where it should end (clip length {clip_min:.0f}-{clip_max:.0f}s),
+ "start_offset": seconds from window start where the clip should begin (2-4 seconds BEFORE the key moment, so the viewer sees it coming),
+ "end_offset": seconds from window start where it should end (at least 4 seconds after the key moment; clip length {clip_min:.0f}-{clip_max:.0f}s),
  "reason": "one short sentence"
 }}"""
 
 
 def grab_keyframes(video: str, start: float, end: float, n: int, width: int, tmp: Path,
                    crop=None) -> tuple[list[bytes], list[float]]:
+    """n frames evenly spread over [start, end]. A frame that cannot be read (e.g. the last seconds of a file that is
+    still being finished) is retried a little earlier and finally skipped; at least 2 must work."""
     tmp.mkdir(parents=True, exist_ok=True)
-    times = [start + (end - start) * (i + 0.5) / n for i in range(n)]
+    wanted = [start + (end - start) * (i + 0.5) / n for i in range(n)]
     imgs: list[bytes] = []
-    for i, t in enumerate(times):
+    times: list[float] = []
+    last_err = None
+    for i, t in enumerate(wanted):
         p = tmp / f"kf_{i}.jpg"
-        grab_frame(video, t, p, width, crop)
-        imgs.append(p.read_bytes())
-    return imgs, [t - start for t in times]
+        for back in (0.0, 1.5, 3.0):
+            try:
+                grab_frame(video, max(start, t - back), p, width, crop)
+                imgs.append(p.read_bytes())
+                times.append(max(start, t - back) - start)
+                break
+            except Exception as e:           # noqa: BLE001
+                last_err = e
+    if len(imgs) < min(2, n):
+        raise RuntimeError(f"could not read frames near {wanted[0]:.0f}-{wanted[-1]:.0f}s of {Path(video).name}: {last_err}")
+    return imgs, times
 
 
 def normalize(raw: dict, window_len: float, clip_min: float, clip_max: float) -> dict:
@@ -90,6 +123,13 @@ def normalize(raw: dict, window_len: float, clip_min: float, clip_max: float) ->
         cat = "nothing_notable"
     so = max(0.0, min(num(raw.get("start_offset"), 0.0), window_len))
     eo = max(0.0, min(num(raw.get("end_offset"), window_len), window_len))
+    km = raw.get("key_moment_offset")
+    km = None if km in (None, "") else max(0.0, min(num(km, 0.0), window_len))
+    if km is not None:                           # the viewer must see it coming and see the result
+        so = min(so, max(0.0, km - 2.5))
+        eo = max(eo, min(window_len, km + 4.5))
+        if eo - so > clip_max:
+            so = max(0.0, eo - clip_max)
     length = eo - so
     if length < clip_min or length > clip_max or eo <= so:
         so, eo = 0.0, min(window_len, clip_max)
@@ -102,11 +142,27 @@ def normalize(raw: dict, window_len: float, clip_min: float, clip_max: float) ->
         "what_happens": str(raw.get("what_happens", "")).strip()[:600],
         "confidence": max(0.0, min(100.0, num(raw.get("confidence")))),
         "interest": max(0.0, min(100.0, num(raw.get("interest")))),
+        "visible_evidence": [str(x).strip()[:160] for x in (raw.get("visible_evidence") or [])
+                             if isinstance(x, (str, int, float)) and str(x).strip()][:4],
+        "real_person_or_overlay_visible": bool(raw.get("real_person_or_overlay_visible")) is True,
         "hook_title": str(raw.get("hook_title", "")).strip().strip('"')[:70],
+        "key_moment_offset": None if km is None else round(km, 2),
+        "timeline": [str(t.get("what", ""))[:140] if isinstance(t, dict) else str(t)[:140]
+                     for t in (raw.get("timeline") or [])][:12],
         "start_offset": round(so, 2),
         "end_offset": round(eo, 2),
         "reason": str(raw.get("reason", "")).strip()[:300],
     }
+
+
+PRESETS = {"loose": (45, 40), "normal": (58, 52), "strict": (70, 65)}
+
+
+def thresholds(cfg) -> tuple[float, float]:
+    """(min confidence, min interest): explicit numbers win, otherwise the strictness preset."""
+    base = PRESETS.get(str(cfg.get("judge.strictness", "normal")).lower(), PRESETS["normal"])
+    c, i = cfg.get("judge.min_confidence"), cfg.get("judge.min_interest")
+    return float(c if c is not None else base[0]), float(i if i is not None else base[1])
 
 
 def decide(j: dict, cfg) -> tuple[bool, str]:
@@ -120,10 +176,15 @@ def decide(j: dict, cfg) -> tuple[bool, str]:
         return False, f"rejected category: {j['category']}"
     if not j["feature_name"] or not j["what_happens"]:
         return False, "missing feature description"
-    if j["confidence"] < float(cfg.get("judge.min_confidence", 60)):
-        return False, f"confidence {j['confidence']:.0f} too low"
-    if j["interest"] < float(cfg.get("judge.min_interest", 55)):
-        return False, f"interest {j['interest']:.0f} too low"
+    if j.get("real_person_or_overlay_visible"):
+        return False, "streamer / webcam / chat / overlay visible in the picture"
+    if cfg.get("judge.require_evidence", True) and len(j.get("visible_evidence", [])) < 2:
+        return False, "no concrete visible evidence"
+    min_conf, min_int = thresholds(cfg)
+    if j["confidence"] < min_conf:
+        return False, f"confidence {j['confidence']:.0f} too low (need {min_conf:.0f})"
+    if j["interest"] < min_int:
+        return False, f"interest {j['interest']:.0f} too low (need {min_int:.0f})"
     return True, "ok"
 
 
@@ -139,6 +200,7 @@ def judge_window(llm, cfg, video: str, start: float, end: float, transcript: str
     prompt = build_prompt(
         cfg.get("game.name"), cfg.get("game.topic_hint"), transcript, window_len, times,
         signal_score, float(cfg.get("video.clip_min")), float(cfg.get("video.clip_max")),
+        hints=list(cfg.get("game.hints", []) or []),
     )
     raw = llm.json(prompt, system=SYSTEM, images=images or None)
     j = normalize(raw, window_len, float(cfg.get("video.clip_min")), float(cfg.get("video.clip_max")))

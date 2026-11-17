@@ -23,6 +23,16 @@ class Fake(BaseHTTPRequestHandler):
         else:
             self.wfile.write(b"{}")
 
+    models_list: list = []
+
+    def do_GET(self):  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"models": [
+            {"name": f"models/{n}", "supportedGenerationMethods": ["generateContent"]} for n in Fake.models_list
+        ]}).encode())
+
     def log_message(self, *a):
         pass
 
@@ -96,3 +106,10 @@ def test_no_key(cfg, monkeypatch):
     assert not LLM(cfg).available()
     with pytest.raises(LLMError):
         LLM(cfg).json("x")
+
+
+def test_all_models_gone_triggers_discovery(llm):
+    Fake.models_list = ["gemini-9-flash-lite", "gemini-9-flash", "gemini-9-flash-image", "gemini-9-pro"]
+    Fake.script = [(404, ""), (404, ""), (200, '{"found": true}')]
+    assert llm.json("x") == {"found": True}
+    assert Fake.seen[-1]["path"] == "/v1beta/models/gemini-9-flash:generateContent"   # best flash, no image/pro

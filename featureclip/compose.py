@@ -8,6 +8,22 @@ from .ffutil import run
 Box = tuple[int, int, int, int]
 
 
+def title_area(crop: Box, mode: str, width: int, height: int) -> tuple[int, int, int] | None:
+    """(heading centre_y, heading max height, handle centre_y) of the blurred strip above the gameplay block
+    in hybrid mode, else None. The channel handle sits right above the gameplay, under the heading."""
+    if mode != "hybrid":
+        return None
+    _, _, w, h = crop
+    block_h = min(int(width * h / w), 1500) // 2 * 2
+    top = int((height - block_h) * 0.35)
+    safe = 150                                    # keep clear of the YouTube Shorts top bar
+    if top - safe < 120:
+        return None
+    handle_h = 64
+    area = top - safe - 20 - handle_h
+    return safe + area // 2, area, top - 20 - handle_h // 2
+
+
 def video_filter(crop: Box, mode: str, width: int, height: int, fps: int, ass_name: str | None,
                  block_aspect: float = 0.8) -> str:
     x, y, w, h = crop

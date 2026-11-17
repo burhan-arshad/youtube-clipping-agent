@@ -1,4 +1,3 @@
-.venv
 .env
 config.yaml
 sources.yaml
@@ -11,5 +10,3 @@ __pycache__/
 *.pyc
 .pytest_cache/
 proofs/
-cookies.txt
-layout.png

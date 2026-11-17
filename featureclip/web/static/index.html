@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>featureclip</title>
+<style>
+  :root{
+    --bg:#0d1017; --panel:#151a24; --panel2:#1b2230; --line:#27304a; --text:#e8ecf6; --muted:#8e99b3;
+    --accent:#ffb21f; --accent2:#ff5c8a; --ok:#39d98a; --bad:#ff6b6b; --warn:#ffd166; --info:#5cc8ff;
+    --radius:14px; --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --bg:#f3f5fa; --panel:#ffffff; --panel2:#f0f2f8; --line:#dfe3ee; --text:#1a2030; --muted:#6a7590;
+    --accent:#e08a00; --accent2:#d63a6a; --shadow:0 8px 24px rgba(30,40,80,.10);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .shell{display:grid;grid-template-columns:230px 1fr;min-height:100%}
+  aside{background:var(--panel);border-right:1px solid var(--line);padding:22px 14px;position:sticky;top:0;height:100vh;
+        display:flex;flex-direction:column;gap:6px}
+  .brand{font-weight:800;font-size:20px;letter-spacing:.3px;padding:0 10px 14px}
+  .brand span{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+              background-clip:text;color:transparent}
+  nav button{all:unset;cursor:pointer;display:flex;gap:10px;align-items:center;padding:11px 12px;border-radius:10px;
+             color:var(--muted);font-weight:600;width:100%;box-sizing:border-box}
+  nav button:hover{background:var(--panel2);color:var(--text)}
+  nav button.on{background:linear-gradient(90deg,rgba(255,178,31,.16),rgba(255,92,138,.10));color:var(--text);
+                box-shadow:inset 3px 0 0 var(--accent)}
+  nav .badge{margin-left:auto;background:var(--accent);color:#1a1200;border-radius:99px;font-size:12px;
+             padding:1px 8px;font-weight:800}
+  #bell .badge{background:var(--accent);color:#1a1200;border-radius:99px;font-size:11px;padding:1px 7px;margin-left:5px;font-weight:800}
+  .side-foot{margin-top:auto;font-size:12.5px;color:var(--muted);padding:10px;border-top:1px solid var(--line)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--muted);margin-right:7px}
+  .dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)} .dot.run{background:var(--accent);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  main{padding:30px 34px 60px;max-width:1280px;width:100%}
+  h1{margin:0 0 4px;font-size:26px} .sub{color:var(--muted);margin:0 0 22px}
+  h2{font-size:16px;margin:0 0 12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;
+        box-shadow:var(--shadow);margin-bottom:18px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px} @media(max-width:1000px){.grid2{grid-template-columns:1fr}}
+  label{display:block;font-weight:600;font-size:13.5px;margin:12px 0 5px}
+  .help{color:var(--muted);font-size:12.5px;margin-top:4px}
+  input[type=text],input[type=password],input[type=number],select,textarea{
+    width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;
+    padding:10px 12px;font:inherit;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,178,31,.18)}
+  .row{display:flex;gap:10px;align-items:center} .row>*{flex:1} .row>.fit{flex:0 0 auto}
+  button.btn{cursor:pointer;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:700;
+             background:var(--panel2);color:var(--text);border:1px solid var(--line);transition:.15s}
+  button.btn:hover{transform:translateY(-1px);border-color:var(--accent)}
+  button.btn.primary{background:linear-gradient(90deg,var(--accent),#ff8a3c);color:#1a1200;border:0}
+  button.btn.good{background:var(--ok);color:#04210f;border:0}
+  button.btn.danger{background:transparent;color:var(--bad);border-color:rgba(255,107,107,.45)}
+  button.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  button.btn.sm{padding:6px 11px;font-size:13px}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .chip{cursor:pointer;padding:7px 14px;border-radius:99px;background:var(--panel);border:1px solid var(--line);
+        font-weight:600;font-size:13.5px;color:var(--muted)}
+  .chip.on{background:var(--accent);color:#1a1200;border-color:var(--accent)}
+  .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:700;background:var(--panel2);
+        color:var(--muted)}
+  .pill.ready{background:rgba(92,200,255,.16);color:var(--info)} .pill.approved{background:rgba(57,217,138,.16);color:var(--ok)}
+  .pill.uploaded{background:rgba(57,217,138,.30);color:var(--ok)} .pill.dropped,.pill.error,.pill.rejected{background:rgba(255,107,107,.15);color:var(--bad)}
+  .pill.running{background:rgba(255,178,31,.2);color:var(--accent)} .pill.done{background:rgba(57,217,138,.16);color:var(--ok)}
+  .pill.stopped,.pill.queued{background:var(--panel2);color:var(--muted)}
+  .log{background:#080b11;color:#c7d0e6;border:1px solid var(--line);border-radius:12px;padding:14px;
+       font:12.5px/1.55 ui-monospace,Consolas,monospace;height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .log .e{color:#ff8f8f} .log .ok{color:#7ee2a8} .log .t{color:#6c7aa0}
+  .clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:18px}
+  .clip{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+        display:flex;flex-direction:column;box-shadow:var(--shadow)}
+  .clip video{width:100%;aspect-ratio:9/16;background:#000;display:block;max-height:520px;object-fit:contain}
+  .clip .nov{aspect-ratio:9/16;max-height:200px;display:flex;align-items:center;justify-content:center;
+             color:var(--muted);background:var(--panel2);padding:14px;text-align:center;font-size:13px}
+  .clip .body{padding:14px;display:flex;flex-direction:column;gap:8px}
+  .clip input.title{font-weight:700;padding:8px 10px}
+  .meta{font-size:12.5px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13px}
+  details p{margin:6px 0 0;font-size:13.5px;color:var(--text)}
+  .why{font-size:13px;color:var(--bad);background:rgba(255,107,107,.08);padding:8px 10px;border-radius:8px}
+  .empty{padding:44px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:var(--radius)}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  .steps li{counter-increment:s;display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .steps li:last-child{border:0}
+  .steps li:before{content:counter(s);flex:0 0 30px;height:30px;border-radius:50%;background:var(--panel2);
+        display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--accent)}
+  .steps li.done:before{content:"✓";background:var(--ok);color:#04210f}
+  .jobs{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto}
+  .job{cursor:pointer;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px solid transparent;
+       display:flex;gap:10px;align-items:center;justify-content:space-between}
+  .job.on{border-color:var(--accent)} .job .t{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .grp{margin-top:6px} .grp h2{color:var(--accent);margin-top:22px}
+  .toggle{display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer;font-weight:600}
+  .toggle input{width:18px;height:18px;accent-color:var(--accent)}
+  .toast{position:fixed;right:22px;bottom:22px;background:var(--panel);border:1px solid var(--line);
+         border-left:4px solid var(--accent);padding:12px 16px;border-radius:10px;box-shadow:var(--shadow);
+         max-width:420px;z-index:50;animation:in .2s}
+  .toast.bad{border-left-color:var(--bad)} .toast.ok{border-left-color:var(--ok)}
+  @keyframes in{from{transform:translateY(10px);opacity:0}}
+  img.preview{max-width:100%;border-radius:12px;border:1px solid var(--line);margin-top:12px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:14px}
+  .kv b{color:var(--muted);font-weight:600}
+  .check{display:flex;gap:8px;align-items:center;padding:4px 0}
+  .theme{all:unset;cursor:pointer;color:var(--muted);font-size:12.5px;padding:6px 10px}
+  @media(max-width:820px){.shell{grid-template-columns:1fr} aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap}
+    .side-foot{display:none} main{padding:20px 16px}}
+
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,178,31,.55)}70%{box-shadow:0 0 0 10px rgba(255,178,31,0)}100%{box-shadow:0 0 0 0 rgba(255,178,31,0)}}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+.live-dot{width:14px;height:14px;border-radius:50%;background:var(--accent);animation:pulse 1.6s infinite;flex:none}
+.live-dot.idle{background:var(--muted);animation:none}.live-dot.bad{background:var(--bad);animation:none}
+.steps{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:14px 0}
+.step{padding:6px 11px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:12.5px;display:flex;gap:6px;align-items:center}
+.step.done{color:var(--ok);border-color:rgba(57,217,138,.4)}
+.step.active{color:#111;background:var(--accent);border-color:var(--accent);font-weight:700;animation:pulse 1.6s infinite}
+.step+.step::before{content:"";}
+.pbar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden;position:relative}
+.pbar>i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .6s}
+.pbar.ind>i{width:40%;position:absolute;animation:slide 1.4s infinite linear}
+.feed{font-size:12.5px;line-height:1.55}.feed div{padding:3px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
+.feed .t{color:var(--muted);flex:none;font-variant-numeric:tabular-nums}
+.cnt{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.cnt span{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12.5px}.cnt b{font-size:15px}
+.tbl{border-collapse:collapse;font-size:13px}.tbl th{color:var(--muted);font-weight:600;padding:4px 8px;text-align:center}.tbl td{padding:5px 8px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><span>feature</span>clip</div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <div id="foot"></div>
+      <button class="theme" id="bell" style="font-size:16px"></button>
+      <button class="theme" id="themeBtn">☾ / ☀ theme</button>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="toasts"></div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S = {};                // /api/state
+let tab = localStorage.getItem("tab") || "assistant";
+let clipFilter = "ready";
+let activeJob = null;      // job id shown in Create/Activity
+let jobSince = 0;
+let settingsCache = null;
+
+async function api(path, opts = {}) {
+  const o = {headers: {"Content-Type": "application/json"}, ...opts};
+  if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
+  const r = await fetch(path, o);
+  let data = null;
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((data && (data.detail || data.message)) || r.statusText);
+  return data;
+}
+function toast(msg, kind="") {
+  const d = document.createElement("div");
+  d.className = "toast " + kind; d.textContent = msg;
+  $("#toasts").appendChild(d);
+  setTimeout(() => d.remove(), kind === "bad" ? 9000 : 4500);
+}
+const TABS = [
+  ["assistant", "🤖", "Assistant"], ["create", "🎬", "New video"], ["clips", "🎞️", "Clips"], ["activity", "📜", "Activity / Log"],
+  ["usage", "📊", "Gemini usage"], ["settings", "⚙️", "Settings"], ["youtube", "▶️", "YouTube upload"],
+];
+function renderNav() {
+  const ready = (S.counts && S.counts.ready) || 0;
+  $("#nav").innerHTML = TABS.map(([id, ic, name]) =>
+    `<button data-t="${id}" class="${tab===id?'on':''}">${ic} ${name}${id==='clips'&&ready?`<span class="badge">${ready}</span>`:''}</button>`).join("");
+  $("#nav").querySelectorAll("button").forEach(b => b.onclick = () => { tab = b.dataset.t; localStorage.setItem("tab", tab); render(); });
+  $("#foot").innerHTML =
+    `<div><span class="dot ${S.has_key?'ok':'bad'}"></span>Gemini key ${S.has_key?'set':'missing'}</div>
+     <div><span class="dot ${S.ffmpeg?'ok':'bad'}"></span>ffmpeg ${S.ffmpeg?'ok':'missing'}</div>
+     <div><span class="dot ${S.running?'run':''}"></span>${S.running?esc(S.running).slice(0,34):'idle'}</div>`;
+}
+function render() { renderNav(); ({create: viewCreate, clips: viewClips, activity: viewActivity,
+  settings: viewSettings, youtube: viewYoutube, usage: viewUsage, assistant: viewAssistant})[tab](); }
+
+// ------------------------------------------------------------------ logs
+function colorLine(l) {
+  const e = esc(l);
+  if (/ERROR|FAIL|Traceback/.test(l)) return `<div class="e">${e}</div>`;
+  if (/-> ready|ACCEPT|OK|Finished|login complete/i.test(l)) return `<div class="ok">${e}</div>`;
+  return `<div>${e}</div>`;
+}
+async function pollJob(targetSel, jobId, statusSel, onDone) {
+  let since = 0, box = $(targetSel);
+  if (!box) return;
+  box.innerHTML = "";
+  while (true) {
+    let j;
+    try { j = await api(`/api/jobs/${jobId}?since=${since}`); } catch (e) { break; }
+    const el = $(targetSel);
+    if (!el || activeJob !== jobId) return;           // user moved away
+    if (j.lines.length) {
+      const stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+      el.insertAdjacentHTML("beforeend", j.lines.map(colorLine).join(""));
+      since = j.total;
+      if (stick) el.scrollTop = el.scrollHeight;
+    }
+    if (statusSel && $(statusSel)) $(statusSel).innerHTML = `<span class="pill ${j.status}">${j.status}</span> ${esc(j.title)}`;
+    if (j.status === "done" || j.status === "error" || j.status === "stopped") {
+      if (j.error) toast(j.error, "bad");
+      if (onDone) onDone(j);
+      refreshState();
+      return;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+async function startJob(body, targetSel, statusSel, onDone) {
+  try {
+    const r = await api("/api/jobs", {method: "POST", body});
+    activeJob = r.id;
+    pollJob(targetSel, r.id, statusSel, onDone);
+    refreshState();
+    return r.id;
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+// ------------------------------------------------------------------ CREATE
+let adj = {facecam: "auto", crop: ["", "", "", ""]};
+const adjBody = () => {
+  const c = adj.crop.map(v => parseFloat(v));
+  return {facecam: adj.facecam === "auto" ? "" : adj.facecam, crop: c.every(v => !isNaN(v)) ? c : null};
+};
+function adjPanelHtml() {
+  return `<div class="card">
+    <h2>Layout preview &amp; adjust</h2>
+    <p class="help" style="margin-top:0">The AI finds the webcam, chat and text overlays and keeps only the gameplay. Preview it before you start,
+    and correct it if it is wrong: pick the webcam corner, or <b>drag a rectangle on the preview</b> around the gameplay you want to keep.</p>
+    <div class="grid2" style="grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
+      <div style="grid-column:span 2"><label>Webcam position</label>
+        <select id="adjFace">${["auto","top-left","top-right","bottom-left","bottom-right","none"].map(o => `<option ${adj.facecam===o?'selected':''}>${o}</option>`).join("")}</select></div>
+      <div style="grid-column:span 2;display:flex;align-items:end"><button class="btn sm" id="adjClear">Reset to auto</button></div>
+      ${["Left %","Top %","Width %","Height %"].map((n, i) => `<div><label>${n}</label><input type="number" min="0" max="100" step="0.1" data-crop="${i}" value="${esc(adj.crop[i])}"></div>`).join("")}
+    </div>
+    <div class="actions">
+      <button class="btn" id="prevVideo">🔍 Preview recorded video</button>
+      <button class="btn" id="prevLive">🔴 Preview live stream</button>
+    </div>
+    <div id="previewBox"></div>
+  </div>`;
+}
+function wireAdjust(getVideo, getLive) {
+  $("#adjFace").onchange = e => adj.facecam = e.target.value;
+  document.querySelectorAll("[data-crop]").forEach(el => el.oninput = () => adj.crop[+el.dataset.crop] = el.value);
+  $("#adjClear").onclick = () => { adj = {facecam: "auto", crop: ["", "", "", ""]}; viewCreate(); };
+  const show = j => {
+    if (j.status !== "done") return;
+    $("#previewBox").innerHTML = `<p class="help">Green = full gameplay area, Red = removed (webcam / chat / text), Yellow = what will appear in the clip.
+      Drag on the image to choose the gameplay area yourself, then press Preview again.</p>
+      <div id="pvWrap" style="position:relative;display:inline-block;max-width:100%;cursor:crosshair;user-select:none">
+      <img class="preview" id="pvImg" draggable="false" src="/media/job/${j.id}/image?t=${Date.now()}"><div id="pvRect" style="position:absolute;border:2px dashed #fff;background:rgba(255,255,255,.12);display:none"></div></div>`;
+    const wrap = $("#pvWrap"), img = $("#pvImg"), rect = $("#pvRect");
+    let start = null;
+    const pos = e => { const r = img.getBoundingClientRect(); return [Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1), Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1)]; };
+    wrap.onmousedown = e => { start = pos(e); e.preventDefault(); };
+    window.onmousemove = e => { if (!start || !$("#pvRect")) return; const p = pos(e), r = img.getBoundingClientRect();
+      const x = Math.min(start[0], p[0]), y = Math.min(start[1], p[1]), w = Math.abs(p[0] - start[0]), h = Math.abs(p[1] - start[1]);
+      Object.assign(rect.style, {display: "block", left: x * r.width + "px", top: y * r.height + "px", width: w * r.width + "px", height: h * r.height + "px"}); };
+    window.onmouseup = e => { if (!start) return; const p = pos(e);
+      const x = Math.min(start[0], p[0]), y = Math.min(start[1], p[1]), w = Math.abs(p[0] - start[0]), h = Math.abs(p[1] - start[1]); start = null;
+      if (w < .1 || h < .1) { rect.style.display = "none"; return; }
+      adj.crop = [x, y, w, h].map(v => (v * 100).toFixed(1));
+      document.querySelectorAll("[data-crop]").forEach(el => el.value = adj.crop[+el.dataset.crop]);
+      toast("Gameplay area set. Press Preview again to check it, then start.", "ok"); };
+  };
+  $("#prevVideo").onclick = () => startJob({kind: "layout", video: getVideo(), ...adjBody()}, "#log", "#jobStatus", show);
+  $("#prevLive").onclick = () => startJob({kind: "layout", video: getLive(), live: true, refresh: true, ...adjBody()}, "#log", "#jobStatus", show);
+}
+function viewCreate() {
+  $("#main").innerHTML = `
+  <h1>New video</h1>
+  <p class="sub">Paste a YouTube link (or choose a video file). Or let the <b>Assistant</b> tab do everything for you automatically.</p>
+  ${!S.has_key ? `<div class="card" style="border-color:var(--bad)"><b>A Gemini API key is required first.</b>
+     Open Settings and paste your key (free: aistudio.google.com/apikey).
+     <div class="actions"><button class="btn primary" id="goSet">Open Settings</button></div></div>` : ""}
+  <div class="grid2">
+    <div class="card">
+      <h2>Recorded video</h2>
+      <label>Video link or file path</label>
+      <div class="row"><input type="text" id="video" placeholder="https://www.youtube.com/watch?v=...  or  D:\\videos\\stream.mp4">
+        <button class="btn sm fit" id="pickFile">Browse file</button></div>
+      <label>Streamer name (optional, credited in the description)</label>
+      <input type="text" id="streamer" placeholder="Ducky Bhai">
+      <label>Streamer channel link (optional)</label>
+      <input type="text" id="credit" placeholder="https://www.youtube.com/@...">
+      <div class="actions"><button class="btn primary" id="runBtn">🚀 Make clips</button></div>
+      <p class="help">The whole video is analysed; long videos can take a while.</p>
+    </div>
+    <div class="card">
+      <h2>LIVE stream (record + clip)</h2>
+      <label>Live stream link</label>
+      <input type="text" id="liveUrl" placeholder="https://www.youtube.com/watch?v=... (live)  or a video file path to test">
+      <label>Length of each recorded piece (minutes)</label>
+      <input type="number" id="liveMin" value="5" min="3" max="30">
+      <div class="actions">
+        <button class="btn primary" id="liveBtn">🔴 Start live</button>
+        <button class="btn danger" id="liveStop" disabled>Stop</button>
+      </div>
+      <p class="help">Recording never stops while clips are being made. The first clips appear after about 8-12 minutes. The layout you set below is used for every piece.</p>
+    </div>
+  </div>
+  ${adjPanelHtml()}
+  <div class="card">
+    <div class="row"><h2 id="jobStatus" style="margin:0">Activity</h2></div>
+    <div class="log" id="log"><span class="t">No job is running.</span></div>
+  </div>`;
+  if ($("#goSet")) $("#goSet").onclick = () => { tab = "settings"; render(); };
+  $("#pickFile").onclick = async () => {
+    try { const r = await api("/api/pick", {method: "POST", body: {kind: "file"}}); if (r.path) $("#video").value = r.path; }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  const vals = () => ({video: $("#video").value, streamer: $("#streamer").value, credit_url: $("#credit").value, ...adjBody()});
+  wireAdjust(() => $("#video").value, () => $("#liveUrl").value);
+  $("#runBtn").onclick = () => startJob({kind: "run", ...vals()}, "#log", "#jobStatus", j => {
+    if (j.status === "done") { toast("Clips are ready! Open the Clips tab.", "ok"); renderNav(); } });
+  $("#liveBtn").onclick = async () => {
+    const id = await startJob({kind: "watch", ...vals(), video: $("#liveUrl").value, minutes: +$("#liveMin").value || 5},
+      "#log", "#jobStatus", () => { if ($("#liveStop")) $("#liveStop").disabled = true; });
+    if (id) { $("#liveStop").disabled = false; $("#liveStop").onclick = async () => { await api(`/api/jobs/${id}/stop`, {method: "POST"}); toast("Stopping; the recorded pieces will still be processed ..."); }; }
+  };
+  if (activeJob) pollJob("#log", activeJob, "#jobStatus");
+}
+
+// ------------------------------------------------------------------ CLIPS
+const fmtT = ts => ts ? new Date(ts * 1000).toLocaleString([], {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
+function reviewHtml(rv) {
+  if (!rv) return "";
+  const issues = (rv.issues || []).map(i => `<li><b>${esc(i.type)}</b>: ${esc(i.text)}</li>`).join("");
+  const checks = (rv.checks || []).map(c => `<li>${c.ok ? "✅" : "❌"} ${esc(c.name)} ${c.detail ? `<span class="help">${esc(c.detail)}</span>` : ""}</li>`).join("");
+  return `<details><summary>Assistant review: ${rv.ok ? "✅ passed" : "⚠️ problems"} (score ${Math.round(rv.score)})</summary>
+    ${issues ? `<ul style="margin:6px 0;padding-left:18px">${issues}</ul>` : ""}<ul style="margin:6px 0;padding-left:18px;list-style:none">${checks}</ul></details>`;
+}
+async function viewClips() {
+  $("#main").innerHTML = `<h1>Clips</h1><p class="sub">Every clip with its title, description and thumbnail. With the Assistant on, good clips are approved and scheduled automatically.</p>
+    <div class="chips" id="chips"></div><div id="clipGrid"><div class="empty">Loading ...</div></div>`;
+  const filters = [["ready", "To review"], ["approved", "Approved"], ["uploaded", "Uploaded / scheduled"], ["dropped", "Dropped / rejected"], ["all", "All"]];
+  const draw = async () => {
+    if (tab !== "clips") return;
+    $("#chips").innerHTML = filters.map(([k, n]) => `<span class="chip ${clipFilter===k?'on':''}" data-f="${k}">${n}</span>`).join("") +
+      (clipFilter === "ready" ? `<span class="chip" id="apAll" style="margin-left:auto">✔ Approve all ready</span>` : "");
+    $("#chips").querySelectorAll(".chip[data-f]").forEach(c => c.onclick = () => { clipFilter = c.dataset.f; draw(); });
+    if ($("#apAll")) $("#apAll").onclick = async () => { const r = await api("/api/clips/approve-all", {method: "POST"}); toast(`${r.approved} clips approved`, "ok"); refreshState(); draw(); };
+    const list = await api("/api/clips?status=" + clipFilter);
+    if (!list.length) { $("#clipGrid").innerHTML = `<div class="empty">No clips in this list yet.</div>`; return; }
+    $("#clipGrid").innerHTML = `<div class="clips">` + list.map(c => {
+      const live = ['ready','approved','uploaded'].includes(c.status);
+      return `<div class="clip" data-id="${c.id}">
+        ${c.has_file ? `<video controls preload="metadata" playsinline ${c.has_thumb ? `poster="/media/clip/${c.id}/thumb"` : ""} src="/media/clip/${c.id}"></video>`
+                     : `<div class="nov">No video file for this clip</div>`}
+        <div class="body">
+          <div class="meta"><span class="pill ${c.status}">${c.status}</span><span>#${c.id}</span>
+            ${c.interest!=null?`<span>interest ${Math.round(c.interest)}</span><span>confidence ${Math.round(c.confidence)}</span>`:''}</div>
+          ${c.scheduled_at ? `<div class="meta">📅 <b>${esc(fmtT(c.scheduled_at))}</b> ${c.publish_state ? "· " + esc(c.publish_state) : ""}
+            ${c.youtube_id ? `· <a style="color:var(--accent)" target="_blank" href="https://youtube.com/shorts/${esc(c.youtube_id)}">open</a>` : ""}</div>` : ""}
+          ${live ? `<label style="margin:4px 0 2px">Title</label><input class="title" type="text" value="${esc(c.title)}" data-f="title">` : ""}
+          <div class="meta"><b>${esc(c.feature)}</b></div>
+          ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ""}
+          ${reviewHtml(c.review)}
+          ${live ? `<details><summary>Description, tags &amp; thumbnail</summary>
+            ${c.has_thumb ? `<img class="preview" style="margin:8px 0" src="/media/clip/${c.id}/thumb?t=${c.updated}">` : ""}
+            <label>Description</label><textarea rows="8" data-f="description">${esc(c.description)}</textarea>
+            <label>Tags (comma separated)</label><input type="text" data-f="tags" value="${esc((c.tags || []).join(", "))}">
+            <div class="actions"><button class="btn sm" data-a="regen">✨ New title / description / thumbnail</button></div></details>` : ""}
+          ${c.evidence && c.evidence.length ? `<div class="meta">AI saw: ${esc(c.evidence.join(" • "))}</div>` : ""}
+          ${c.script ? `<details><summary>Voice-over script</summary><p>${esc(c.script)}</p></details>` : ""}
+          <div class="actions" style="margin-top:6px">
+            ${c.status==='ready' ? `<button class="btn good sm" data-a="approve">Approve</button><button class="btn danger sm" data-a="reject">Reject</button>` : ""}
+            ${c.status==='approved' ? `<button class="btn sm" data-a="reject">Remove approval</button>` : ""}
+            ${c.status==='ready'||c.status==='approved' ? `<button class="btn sm" data-a="publish" title="Upload this clip now with the next free publish time">⬆ Schedule now</button><button class="btn sm" data-a="review">🔎 Re-review</button>` : ""}
+            ${['ready','approved','dropped','error','rejected'].includes(c.status) ? `<button class="btn sm" data-a="rebuild" title="New script and a fresh render">Rebuild</button>` : ""}
+          </div>
+        </div>
+      </div>`; }).join("") + `</div>`;
+    $("#clipGrid").querySelectorAll(".clip").forEach(card => {
+      const id = +card.dataset.id;
+      card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
+        const a = b.dataset.a;
+        try {
+          if (a === "approve") await api("/api/clips/approve", {method: "POST", body: {ids: [id]}});
+          if (a === "reject") await api("/api/clips/reject", {method: "POST", body: {ids: [id]}});
+          if (a === "rebuild") { const r = await api(`/api/clips/${id}/rebuild`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
+          if (a === "publish") { const r = await api(`/api/clips/${id}/publish`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
+          if (a === "regen") { b.disabled = true; b.textContent = "Writing ..."; const r = await api(`/api/clips/${id}/regen-meta`, {method: "POST"}); toast("New title: " + r.title, "ok"); }
+          if (a === "review") { await api(`/api/clips/${id}/review`, {method: "POST"}); toast("The assistant will review it again within a minute", "ok"); }
+          refreshState(); draw();
+        } catch (e) { toast(e.message, "bad"); draw(); }
+      });
+      card.querySelectorAll("[data-f]").forEach(inp => inp.onchange = async () => {
+        await api(`/api/clips/${id}`, {method: "PATCH", body: {[inp.dataset.f]: inp.value}}); toast(inp.dataset.f + " saved", "ok"); });
+    });
+  };
+  draw();
+}
+
+// ------------------------------------------------------------------ ACTIVITY
+async function viewActivity() {
+  $("#main").innerHTML = `<h1>Activity / Log</h1><p class="sub">Live log of every job. If something goes wrong, copy the log from here.</p>
+    <div class="grid2" style="grid-template-columns:320px 1fr">
+      <div class="card"><h2>Jobs</h2><div class="jobs" id="jobs"></div></div>
+      <div class="card"><div class="row"><h2 id="aStatus" style="margin:0">—</h2><button class="btn sm fit" id="copyLog">Copy log</button></div>
+      <div class="log" id="alog" style="height:520px"><span class="t">Select a job.</span></div></div></div>`;
+  const draw = async () => {
+    if (tab !== "activity") return;
+    const jobs = await api("/api/jobs");
+    if (!jobs.length) { $("#jobs").innerHTML = `<div class="help">No jobs yet.</div>`; return; }
+    if (!activeJob) activeJob = jobs[0].id;
+    $("#jobs").innerHTML = jobs.map(j => `<div class="job ${j.id===activeJob?'on':''}" data-id="${j.id}">
+      <span class="t">${esc(j.title)}</span><span class="pill ${j.status}">${j.status}</span></div>`).join("");
+    $("#jobs").querySelectorAll(".job").forEach(el => el.onclick = () => { activeJob = +el.dataset.id; draw(); pollJob("#alog", activeJob, "#aStatus"); });
+  };
+  await draw();
+  if (activeJob) pollJob("#alog", activeJob, "#aStatus");
+  $("#copyLog").onclick = () => { navigator.clipboard.writeText($("#alog").innerText); toast("Log copied", "ok"); };
+  const t = setInterval(() => { if (tab !== "activity") return clearInterval(t); draw(); }, 4000);
+}
+
+// ------------------------------------------------------------------ SETTINGS
+async function loadVoiceLab() {
+  const cur = (settingsCache.find(f => f.key === "narration.gemini_voice") || {}).value || "";
+  const style = (settingsCache.find(f => f.key === "narration.gemini_style") || {}).value || "";
+  $("#vlVoice").value = cur; $("#vlStyle").value = style;
+  try {
+    const v = await api("/api/voices");
+    $("#vlList").innerHTML = v.prebuilt.map(x => `<option value="${esc(x.id)}">${esc(x.style)}</option>`).join("");
+  } catch (e) {}
+  $("#vlPlay").onclick = async () => {
+    $("#vlPlay").disabled = true; $("#vlMsg").textContent = "Generating ...";
+    try {
+      const r = await api("/api/voice-test", {method: "POST", body: {voice: $("#vlVoice").value, style: $("#vlStyle").value, text: $("#vlText").value}});
+      const a = $("#vlAudio"); a.src = r.audio; a.style.display = "block"; a.play(); $("#vlMsg").textContent = `${r.seconds}s - like it? Put the name in 'Gemini voice' above and Save.`;
+    } catch (e) { $("#vlMsg").textContent = ""; toast(e.message, "bad"); }
+    $("#vlPlay").disabled = false;
+  };
+  $("#vlLib").onclick = async () => {
+    $("#vlMsg").textContent = "Loading ...";
+    try {
+      const v = await api("/api/voices?library=true&lang=en");
+      $("#vlMsg").textContent = v.error ? v.error : `${v.library.length} voices`;
+      $("#vlTable").innerHTML = v.library.length ? `<table class="tbl" style="width:100%;margin-top:8px"><tr><th align="left">Name</th><th>Accent</th><th>Gender</th><th align="left">Description</th><th></th></tr>` +
+        v.library.map(x => `<tr><td>${esc(x.name || x.id)}</td><td align="center">${esc(x.accent)}</td><td align="center">${esc(x.gender)}</td><td>${esc(x.description)}</td>
+        <td><button class="btn sm fit" data-use="${esc(x.id)}">Try</button></td></tr>`).join("") + `</table>` : "";
+      document.querySelectorAll("[data-use]").forEach(b => b.onclick = () => { $("#vlVoice").value = b.dataset.use; $("#vlPlay").click(); });
+    } catch (e) { $("#vlMsg").textContent = ""; toast(e.message, "bad"); }
+  };
+}
+async function viewSettings() {
+  $("#main").innerHTML = `<h1>Settings</h1><p class="sub">Everything is configured here. Changes apply to the next job after you save.</p><div id="form">Loading ...</div>`;
+  const fields = await api("/api/settings");
+  settingsCache = fields;
+  const groups = [...new Set(fields.map(f => f.group))];
+  $("#form").innerHTML = `<div class="card">` + groups.map(g => `<div class="grp"><h2>${esc(g)}</h2>` +
+    fields.filter(f => f.group === g).map(f => fieldHtml(f)).join("") + `</div>`).join("") +
+    `<div class="actions"><button class="btn primary" id="saveBtn">💾 Save</button>
+     <button class="btn" id="testBtn">🧪 Test Gemini</button><button class="btn" id="docBtn">🩺 System check</button></div>
+     <div id="doctor"></div></div>
+    <div class="card" id="voiceLab"><h2>🎙 Voice lab</h2>
+      <div class="help">Listen before you choose. Each play uses one Gemini voice request (about 10 a day per model on the free tier), so audition a few voices, not dozens.</div>
+      <div class="row" style="margin-top:8px"><input id="vlVoice" placeholder="Voice name or library id" style="flex:1" list="vlList"><datalist id="vlList"></datalist>
+        <input id="vlStyle" placeholder="Style (optional)" style="flex:2"></div>
+      <textarea id="vlText" rows="2" style="width:100%;margin-top:8px">Whoa, look at that. The whole back end just folded like real metal. <short pause> Did you notice that?</textarea>
+      <div class="actions" style="margin-top:8px"><button class="btn sm fit" id="vlPlay">▶ Play sample</button>
+        <button class="btn sm fit" id="vlLib">📚 Browse library voices (English)</button><span class="help" id="vlMsg" style="margin:0 8px"></span></div>
+      <audio id="vlAudio" controls style="width:100%;margin-top:8px;display:none"></audio><div id="vlTable"></div></div>`;
+  loadVoiceLab();
+  document.querySelectorAll("[data-pick]").forEach(b => b.onclick = async () => {
+    const inp = document.querySelector(`[data-key="${b.dataset.for}"]`);
+    try { const r = await api("/api/pick", {method: "POST", body: {kind: b.dataset.pick, initial: inp.value}}); if (r.path) inp.value = r.path; }
+    catch (e) { toast(e.message, "bad"); }
+  });
+  document.querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
+    const inp = document.querySelector(`[data-key="${b.dataset.for}"]`);
+    const p = inp.value || inp.placeholder;
+    try { await api("/api/open-folder", {method: "POST", body: {path: p}}); } catch (e) { toast(e.message, "bad"); }
+  });
+  $("#saveBtn").onclick = async () => {
+    const values = {};
+    document.querySelectorAll("[data-key]").forEach(el => {
+      values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value;
+    });
+    try { const r = await api("/api/settings", {method: "POST", body: values}); toast("Settings saved ✔", "ok"); await refreshState(); viewSettings(); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  $("#testBtn").onclick = async () => {
+    $("#testBtn").disabled = true; $("#testBtn").textContent = "Testing ...";
+    try { const r = await api("/api/test-llm", {method: "POST"}); toast(r.message, r.ok ? "ok" : "bad"); }
+    catch (e) { toast(e.message, "bad"); }
+    $("#testBtn").disabled = false; $("#testBtn").textContent = "🧪 Test Gemini";
+  };
+  $("#docBtn").onclick = async () => {
+    const d = await api("/api/doctor");
+    $("#doctor").innerHTML = `<div style="margin-top:16px">` + d.map(c => `<div class="check"><span class="dot ${c.ok?'ok':'bad'}"></span><b>${esc(c.name)}</b>
+      ${c.ok ? "" : `<span class="help" style="margin:0">— ${esc(c.hint)}</span>`}</div>`).join("") + `</div>`;
+  };
+}
+function fieldHtml(f) {
+  const k = esc(f.key), help = f.help ? `<div class="help">${esc(f.help)}</div>` : "";
+  if (f.type === "bool") return `<label class="toggle"><input type="checkbox" data-key="${k}" ${f.value?'checked':''}> ${esc(f.label)}</label>${help}`;
+  let input;
+  if (f.type === "select") input = `<select data-key="${k}">${f.options.map(o => `<option value="${esc(o)}" ${String(f.value)===o?'selected':''}>${esc(o||'(none)')}</option>`).join("")}</select>`;
+  else if (f.type === "password") input = `<input type="password" data-key="${k}" placeholder="${f.is_set ? 'Saved: ' + esc(f.masked) + ' (enter a new key to replace it)' : 'Paste here'}" autocomplete="off">`;
+  else if (f.type === "number") input = `<input type="number" data-key="${k}" value="${esc(f.value)}">`;
+  else input = `<input type="text" data-key="${k}" value="${esc(f.value)}" ${f.type==='folder'||f.type==='file'?'placeholder="(default)"':''}>`;
+  if (f.type === "folder") input = `<div class="row">${input}<button class="btn sm fit" data-pick="folder" data-for="${k}">Browse</button><button class="btn sm fit" data-open data-for="${k}">Open</button></div>`;
+  if (f.type === "file") input = `<div class="row">${input}<button class="btn sm fit" data-pick="file" data-for="${k}">Choose file</button></div>`;
+  return `<label>${esc(f.label)}</label>${input}${help}`;
+}
+
+// ------------------------------------------------------------------ YOUTUBE
+function viewYoutube() {
+  const approved = (S.counts && S.counts.approved) || 0;
+  $("#main").innerHTML = `<h1>YouTube upload</h1><p class="sub">One-time setup, then upload approved clips with one click.</p>
+  <div class="grid2"><div class="card"><h2>Setup (one time only)</h2><ol class="steps">
+    <li class="${S.client_secret?'done':''}"><div><b>Create an OAuth client in Google Cloud</b>
+      <div class="help">console.cloud.google.com → new project → enable "YouTube Data API v3" → OAuth consent screen (External, add your email as a test user) →
+      Credentials → Create OAuth client ID → type <b>Desktop app</b> → download the JSON.</div>
+      <div class="actions"><input type="file" id="secretFile" accept=".json" style="display:none">
+        <button class="btn sm" id="secretBtn">${S.client_secret?'Replace client_secret.json':'Choose client_secret.json'}</button></div></div></li>
+    <li class="${S.youtube_logged_in?'done':''}"><div><b>Log in</b>
+      <div class="help">A browser window opens. Choose the Google account that owns your YouTube channel and click Allow.</div>
+      <div class="actions"><button class="btn sm" id="loginBtn" ${S.client_secret?'':'disabled'}>YouTube login</button>
+      ${S.youtube_logged_in?'<button class="btn sm danger" id="logoutBtn">Logout</button>':''}</div></div></li>
+  </ol></div>
+  <div class="card"><h2>Upload</h2>
+    <div class="kv"><b>Approved clips</b><span>${approved}</span><b>Uploaded today</b><span>${S.uploads_today ?? 0} / ${S.max_per_day}</span>
+    <b>Privacy</b><span>${esc(S.privacy)} <span class="help">(change in Settings)</span></span></div>
+    <div class="actions"><button class="btn" id="dryBtn" ${approved?'':'disabled'}>Dry run (nothing is sent)</button>
+      <button class="btn primary" id="upBtn" ${approved&&S.youtube_logged_in?'':'disabled'}>⬆ Upload</button></div>
+    <p class="help">Scheduled uploads are sent private and YouTube publishes them at the slot time. <b>Important:</b> until your Google Cloud project passes YouTube's API audit, YouTube keeps every API upload private and ignores the schedule. The assistant tells you when that happens; you can then publish from YouTube Studio. Custom thumbnails are not accepted for Shorts, so the thumbnail is made for your records and for any normal video.</p>
+    <div class="log" id="ylog" style="height:230px;margin-top:12px"><span class="t">The log will appear here.</span></div>
+    <div id="ystatus" style="margin-top:8px"></div>
+  </div></div>`;
+  $("#secretBtn").onclick = () => $("#secretFile").click();
+  $("#secretFile").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try { await api("/api/youtube/client-secret", {method: "POST", body: {content: await f.text()}}); toast("client_secret.json saved ✔", "ok"); await refreshState(); viewYoutube(); }
+    catch (err) { toast(err.message, "bad"); }
+  };
+  $("#loginBtn").onclick = () => startJob({kind: "youtube_login"}, "#ylog", "#ystatus", async () => { await refreshState(); viewYoutube(); });
+  if ($("#logoutBtn")) $("#logoutBtn").onclick = async () => { await api("/api/youtube/logout", {method: "POST"}); await refreshState(); viewYoutube(); };
+  $("#dryBtn").onclick = () => startJob({kind: "upload", dry_run: true}, "#ylog", "#ystatus");
+  $("#upBtn").onclick = () => { if (confirm("The approved clips will now be uploaded to YouTube. Continue?"))
+    startJob({kind: "upload", dry_run: false}, "#ylog", "#ystatus", () => { refreshState(); }); };
+}
+
+
+// ------------------------------------------------------------------ USAGE
+async function viewUsage() {
+  $("#main").innerHTML = `<h1>Gemini usage</h1>
+    <p class="sub">Live requests and fails per model. These are the requests <b>this app</b> sent (Google does not report your remaining quota). Updates every 3 seconds.</p>
+    <div id="usageBody">Loading ...</div>`;
+  const bar = (v, max, color) => `<div style="height:8px;background:var(--panel2);border-radius:9px;margin-top:5px"><div style="height:8px;border-radius:9px;background:${color};width:${Math.min(100, max ? v * 100 / max : 0)}%"></div></div>`;
+  const draw = async () => {
+    if (tab !== "usage") return;
+    let u; try { u = await api("/api/usage"); } catch (e) { return; }
+    const ago = ts => { const s = Math.max(0, Math.round(u.now - ts)); return s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
+    $("#usageBody").innerHTML = `
+      <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
+        <div class="card"><div class="help">API key</div><h2 style="margin:4px 0">${u.has_key ? esc(u.key_hint || "set") : "not set"}</h2></div>
+        <div class="card"><div class="help">Successful requests today</div><h2 style="margin:4px 0;font-size:26px">${u.ok_today}</h2></div>
+        <div class="card"><div class="help">Failed today (429 / errors)</div><h2 style="margin:4px 0;font-size:26px;color:${u.fail_today ? 'var(--bad)' : 'inherit'}">${u.fail_today}</h2></div>
+        <div class="card"><div class="help">Requests in the last minute</div><h2 style="margin:4px 0;font-size:26px">${u.rpm_now}</h2></div>
+      </div>
+      <div class="card"><h2>Per model (today)</h2>
+        ${u.models.map(m => {
+          const total = m.ok + m.fail, cd = m.cooldown;
+          const state = cd ? `<span class="pill error">cooling down ${Math.ceil(cd.left / 60)} min · ${esc(cd.reason)}</span>` : (total ? `<span class="pill done">active</span>` : `<span class="pill queued">unused</span>`);
+          return `<div style="margin:14px 0;padding-bottom:12px;border-bottom:1px solid var(--line)">
+            <div class="row"><b style="flex:2">${esc(m.model)}</b><span style="flex:3;text-align:right">${state}</span></div>
+            <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:8px">
+              <div><div class="help">Per minute (RPM) now / limit</div><b>${m.rpm_now} / ${m.limit_rpm ?? "?"}</b>${bar(m.rpm_now, m.limit_rpm, "var(--info)")}<div class="help">peak today ${m.rpm_peak}</div></div>
+              <div><div class="help">Per day (RPD) used / limit</div><b>${m.ok} / ${m.limit_rpd ?? "?"}</b>${bar(m.ok, m.limit_rpd, m.limit_rpd && m.ok > m.limit_rpd * .85 ? "var(--bad)" : "var(--accent)")}
+                ${m.google_peak ? `<div class="help">Google 28-day peak: ${m.google_peak.rpm} RPM · ${m.google_peak.rpd} RPD</div>` : ""}</div>
+              <div><div class="help">Failed today</div><b style="color:${m.fail ? 'var(--bad)' : 'inherit'}">${m.fail}</b>
+                ${m.last_error ? `<div class="help">${esc(m.last_error)} (${m.last_at ? ago(m.last_at) : ""})</div>` : ""}</div>
+            </div></div>`; }).join("")}
+        <p class="help">When a model hits its limit the app switches to the next one at once; a model whose daily quota is used up rests for an hour. Nothing is skipped: the work waits and continues.</p>
+      </div>
+      <div class="card"><h2>Latest requests</h2>
+        ${u.recent.length ? `<div style="font:12.5px ui-monospace,Consolas,monospace;max-height:260px;overflow:auto">${u.recent.map(r =>
+          `<div style="padding:3px 0;color:${r.ok ? 'inherit' : 'var(--bad)'}">${r.ok ? "✔" : "✖"} ${esc(ago(r.ts))} · ${esc(r.model)} ${r.err ? "· " + esc(r.err) : ""}</div>`).join("")}</div>` : `<div class="help">No requests yet.</div>`}
+      </div>
+      <div class="card"><h2>Free-tier limits per model</h2>
+        <p class="help" style="margin-top:0">From your Google AI Studio "Rate limits" page. RPM = requests per minute, TPM = tokens per minute, RPD = requests per day.
+        Only the two <b>Flash Lite</b> models allow 500 requests/day; the other Flash models allow just 20/day, so the app uses Flash Lite first.</p>
+        <div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:13.5px">
+          <tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">Model</th><th>Type</th><th>RPM</th><th>TPM</th><th>RPD</th></tr>
+          ${u.limits.map(l => `<tr style="border-top:1px solid var(--line)"><td style="padding:7px 8px"><b>${esc(l.model)}</b></td><td>${esc(l.category)}</td>
+            <td>${l.rpm ?? "∞"}</td><td>${l.tpm ? l.tpm.toLocaleString() : "∞"}</td><td>${l.rpd ? l.rpd.toLocaleString() : "∞"}</td></tr>`).join("")}
+        </table></div></div>
+      <div class="card"><h2>Successful requests, last days</h2>
+        ${u.days.length ? u.days.map(d => { const mx = Math.max(1, ...u.days.map(x => x.calls)); return `<div class="row" style="margin:6px 0"><span class="fit" style="width:92px;font-size:13px;color:var(--muted)">${esc(d.day)}</span>
+          <div style="flex:1;height:14px;background:var(--panel2);border-radius:9px"><div style="height:14px;border-radius:9px;background:linear-gradient(90deg,var(--accent),var(--accent2));width:${d.calls * 100 / mx}%"></div></div>
+          <span class="fit" style="width:60px;text-align:right">${d.calls}</span></div>`; }).join("") : `<div class="help">No data yet.</div>`}
+      </div>`;
+  };
+  await draw();
+  const t = setInterval(() => { if (tab !== "usage") return clearInterval(t); draw(); }, 3000);
+}
+
+// ------------------------------------------------------------------ ASSISTANT
+async function viewAssistant() {
+  $("#main").innerHTML = `<h1>Assistant</h1>
+    <p class="sub">Give it live or video links. It records, makes the clips, checks every video, title, description and thumbnail, fixes problems, and schedules 3 videos a day. You get a notification when it needs a new link.</p>
+    <div id="asLive"></div><div id="asBody">Loading ...</div>`;
+  const fmtDur = sec => { sec = Math.max(0, Math.round(sec)); const m = Math.floor(sec / 60), h = Math.floor(m / 60); return h ? `${h}h ${m % 60}m` : m ? `${m}m ${sec % 60}s` : `${sec}s`; };
+  const drawLive = async () => {
+    if (tab !== "assistant") return;
+    let L; try { L = await api("/api/assistant/live"); } catch (e) { return; }
+    const idle = L.mode === "idle";
+    const elapsed = L.job ? fmtDur(L.now - L.job.since) : (L.assistant ? fmtDur(L.now - L.assistant.since) : "");
+    const bar = L.progress != null ? `<div class="pbar"><i style="width:${Math.min(100, L.progress)}%"></i></div>`
+      : (!idle ? `<div class="pbar ind"><i></i></div>` : "");
+    const ev = {ok: "✅", bad: "❌", warn: "⚠️", info: "ℹ️"};
+    $("#asLive").innerHTML = `<div class="card" style="border-color:${L.warning ? "var(--bad)" : idle ? "var(--line)" : "var(--accent)"}">
+      <div class="row" style="align-items:center;gap:12px"><span class="live-dot ${idle ? "idle" : L.warning ? "bad" : ""}"></span>
+        <div style="flex:1"><div style="font-size:11px;letter-spacing:.08em;color:var(--muted)">${idle ? "ASSISTANT IS" : "RIGHT NOW"}</div>
+          <div style="font-size:19px;font-weight:700">${esc(L.headline || "Idle")}</div>
+          ${L.detail ? `<div class="help" style="margin:2px 0 0">${esc(L.detail)}${L.next_check_in != null && idle && L.enabled ? ` · next check in ${L.next_check_in}s` : ""}</div>` : ""}
+          ${L.job ? `<div class="help" style="margin:2px 0 0">${esc(L.job.title)} · running for ${elapsed}${L.pieces ? ` · ${L.pieces} live piece(s) processed` : ""}</div>` : ""}</div>
+        ${L.source ? `<div><button class="btn sm fit" data-lstop="${L.source.id}">⏹ Stop</button> <button class="btn sm fit" data-lrestart="${L.source.id}">🔄 Re-check type &amp; restart</button></div>` : ""}</div>
+      <div style="margin-top:12px">${bar}</div>
+      ${L.warning ? `<div style="margin-top:10px;padding:9px 12px;border-radius:10px;background:rgba(255,107,107,.1);border:1px solid var(--bad);font-size:13px"><b>⚠️ Problem:</b> ${esc(L.warning)}</div>` : ""}
+      <div class="steps">${L.steps.map((s, i) => `${i ? '<span style="color:var(--muted)">›</span>' : ""}<span class="step ${s.state}">${s.state === "done" ? "✓" : s.state === "active" ? "●" : ""} ${esc(s.label)}</span>`).join("")}</div>
+      ${L.assistant && L.mode === "job" ? `<div class="help" style="margin:0 0 8px">🤖 At the same time the assistant is: <b>${esc(L.assistant.text)}</b> (${fmtDur(L.now - L.assistant.since)})</div>` : ""}
+      <div class="cnt"><span><b>${L.counters.in_review}</b> in review</span><span><b>${L.counters.approved}</b> approved</span><span><b>${L.counters.scheduled}</b> scheduled</span>
+        <span><b>${L.counters.uploaded}</b> uploaded</span><span><b>${L.counters.rejected}</b> rejected</span>${L.counters.next_publish ? `<span>next public: <b>${esc(L.counters.next_publish)}</b></span>` : ""}</div>
+      <div class="grid2" style="margin-top:14px;gap:16px">
+        <div><div class="help" style="margin:0 0 4px"><b>Video work (live log)</b></div><div class="feed">${L.feed.length ? L.feed.map(f => `<div><span class="t">${esc(f.t)}</span><span>${esc(f.text)}</span></div>`).join("") : '<div class="help">No video work running.</div>'}</div></div>
+        <div><div class="help" style="margin:0 0 4px"><b>Assistant decisions</b></div><div class="feed">${L.events.length ? L.events.map(f => `<div><span class="t">${new Date(f.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}</span><span>${ev[f.level] || ""} ${esc(f.text)}</span></div>`).join("") : '<div class="help">Nothing decided yet.</div>'}</div></div>
+      </div></div>`;
+    document.querySelectorAll("[data-lstop]").forEach(b => b.onclick = async () => { if (!confirm("Stop this job?")) return; await api(`/api/assistant/sources/${b.dataset.lstop}/stop`, {method: "POST", body: {}}); toast("Stopping ...", "ok"); drawLive(); });
+    document.querySelectorAll("[data-lrestart]").forEach(b => b.onclick = async () => { await api(`/api/assistant/sources/${b.dataset.lrestart}/stop`, {method: "POST", body: {restart: true}}); toast("Stopped. The assistant will check the link type again and restart it.", "ok"); drawLive(); });
+  };
+  drawLive();
+  const tl = setInterval(() => { if (tab !== "assistant") return clearInterval(tl); drawLive(); }, 2000);
+  const draw = async () => {
+    if (tab !== "assistant") return;
+    const [a, sc, fields, ins] = await Promise.all([api("/api/assistant"), api("/api/schedule"), api("/api/settings"), api("/api/insights")]);
+    const keep = {}; document.querySelectorAll("#asBody [data-key]").forEach(e => keep[e.dataset.key] = e.type === "checkbox" ? e.checked : e.value);
+    const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#asBody") && ["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName);
+    if (editing && $("#asForm")) { $("#asState").innerHTML = stateHtml(a); $("#asQueue").innerHTML = queueHtml(a); wireQueue(); return; }
+    const insOpen = document.querySelector("#asIns") ? document.querySelector("#asIns").open : true;
+    const mine = fields.filter(f => ["Assistant", "Schedule", "Safety & disk", "Notifications"].includes(f.group));
+    $("#asBody").innerHTML = `
+      <div class="card" id="asState">${stateHtml(a)}</div>
+      <details class="card" id="asIns" ${insOpen ? "open" : ""}><summary style="cursor:pointer"><h2 style="display:inline">📈 What the assistant learns</h2></summary>${insightsHtml(ins)}</details>
+      <div class="grid2">
+        <div class="card"><h2>Links for the assistant</h2>
+          <label>Live stream or video link</label>
+          <input type="text" id="asUrl" placeholder="https://www.youtube.com/watch?v=...">
+          <div class="grid2" style="gap:10px"><div><label>Streamer (credit)</label><input type="text" id="asStreamer" placeholder="Ducky Bhai"></div>
+            <div><label>Channel link (credit)</label><input type="text" id="asCredit" placeholder="https://www.youtube.com/@..."></div></div>
+          <div class="grid2" style="gap:10px"><div><label>Type</label><select id="asKind"><option value="auto">auto-detect</option><option value="live">live stream</option><option value="video">recorded video</option></select></div>
+            <div><label>Webcam position</label><select id="asFace">${["auto","top-left","top-right","bottom-left","bottom-right","none"].map(o => `<option>${o}</option>`).join("")}</select></div></div>
+          <div class="actions"><button class="btn primary" id="asAdd">➕ Add to queue</button></div>
+          <p class="help">Links are processed one after another. Tip: use <b>New video → Layout preview</b> first if a streamer's layout is unusual.</p>
+          <div id="asQueue" style="margin-top:12px">${queueHtml(a)}</div>
+        </div>
+        <div class="card"><h2>Publishing plan (Pakistan time)</h2>
+          ${sc.slots.map(x => `<div class="kv" style="margin:6px 0"><b>${x.pkt} PKT</b><span class="help" style="margin:0">UK ${x.audience.UK} · Europe ${x.audience["Europe (CET)"]} · US East ${x.audience["US East"]} · US West ${x.audience["US West"]}</span></div>`).join("")}
+          <p class="help">${esc(sc.note)}</p>
+          <h2 style="margin-top:16px">Scheduled videos</h2>
+          ${sc.scheduled.length ? sc.scheduled.map(x => `<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(x.at_text)}</b><div class="help" style="margin:0">${esc(x.title)} ${x.state ? "· " + esc(x.state) : ""}</div></div>`).join("") : `<div class="help">Nothing scheduled yet.</div>`}
+          <h2 style="margin-top:16px">Next free slots</h2>
+          <div class="help">${sc.free.slice(0, 6).map(x => esc(x.text)).join("<br>")}</div>
+        </div>
+      </div>
+      <div class="card" id="asForm"><h2>Assistant settings</h2>
+        ${["Assistant", "Schedule", "Safety & disk", "Notifications"].map(g => `<div class="grp"><h2>${g}</h2>${mine.filter(f => f.group === g).map(fieldHtml).join("")}</div>`).join("")}
+        <div class="actions"><button class="btn primary" id="asSave">💾 Save</button><button class="btn" id="asTest">🔔 Send test notification</button></div>
+        <p class="help">YouTube needs the OAuth setup in the YouTube tab first. Until your Google project passes YouTube's API audit, YouTube keeps API uploads private: the assistant tells you when that happens.</p>
+      </div>`;
+    Object.entries(keep).forEach(([k, v]) => { const el = document.querySelector(`#asBody [data-key="${k}"]`); if (el) { if (el.type === "checkbox") el.checked = v; else el.value = v; } });
+    wireQueue();
+    $("#asAdd").onclick = async () => {
+      try {
+        await api("/api/assistant/sources", {method: "POST", body: {url: $("#asUrl").value, kind: $("#asKind").value, streamer: $("#asStreamer").value,
+          credit_url: $("#asCredit").value, facecam: $("#asFace").value === "auto" ? "" : $("#asFace").value}});
+        toast("Added to the queue", "ok"); $("#asUrl").value = ""; draw();
+      } catch (e) { toast(e.message, "bad"); }
+    };
+    $("#asSave").onclick = async () => {
+      const values = {}; document.querySelectorAll("#asForm [data-key]").forEach(el => values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value);
+      try { await api("/api/settings", {method: "POST", body: values}); toast("Saved ✔", "ok"); await api("/api/assistant/run-now", {method: "POST"}); draw(); } catch (e) { toast(e.message, "bad"); }
+    };
+    $("#asTest").onclick = async () => { await api("/api/notifications/test", {method: "POST"}); toast("Sent. Check the bell, your phone (ntfy) or Telegram.", "ok"); refreshNotes(); };
+  };
+  const stateHtml = a => `<div class="row"><h2 style="margin:0;flex:2"><span class="dot ${a.enabled ? (a.state.state === 'working' ? 'run' : 'ok') : 'bad'}"></span>
+      Assistant is ${a.enabled ? "ON (" + esc(a.mode) + " mode)" : "OFF"}</h2>
+      <button class="btn sm fit" id="asToggle">${a.enabled ? "Switch off" : "Switch on"}</button><button class="btn sm fit" id="asNow">Check now</button></div>
+    ${a.safe.on ? `<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--bad);border-radius:10px;background:rgba(255,107,107,.1)">
+        <b style="color:var(--bad)">🛑 SAFE MODE ON</b> <span class="help" style="margin:0">${esc(a.safe.reason || "")}</span>
+        <div class="help" style="margin:4px 0 8px">No uploads, no new links, nothing is approved. Everything already on YouTube stays as it is.</div>
+        <button class="btn sm fit" id="safeOff">Switch safe mode off</button>
+        <button class="btn sm fit" id="safePull">Pull scheduled videos back to private</button>
+        ${a.safe.held.length ? `<button class="btn sm fit" id="safeRelease">Re-schedule ${a.safe.held.length} held video(s) and resume</button>` : ""}</div>`
+      : `<div style="margin-top:10px"><button class="btn sm fit danger" id="safeOn">🛑 Safe mode</button>
+        <span class="help" style="margin-left:8px">One click stops all uploads and new work.</span></div>`}
+    <div class="help" style="margin-top:8px">💾 Free disk: <b>${a.disk.free_gb} GB</b>${a.disk.last ? ` · last cleanup freed ${a.disk.last.freed_mb} MB` : ""} <button class="btn sm fit" id="cleanNow" style="margin-left:6px">Clean now</button></div>
+    <div class="help" style="margin-top:8px">${esc(a.state.message || "")} ${a.state.tick_error ? `<span style="color:var(--bad)">· ${esc(a.state.tick_error)}</span>` : ""}</div>
+    <div class="chips" style="margin:12px 0 0"><span class="pill ready">${a.counts.ready} in review</span><span class="pill approved">${a.counts.approved} approved</span>
+      <span class="pill uploaded">${a.counts.uploaded} uploaded</span><span class="pill rejected">${a.counts.rejected} rejected</span></div>`;
+  const queueHtml = a => a.sources.length ? a.sources.map(s => `<div class="job" style="cursor:default;margin-bottom:6px">
+      <span class="t" title="${esc(s.url)}"><span class="pill ${s.status==='running'?'running':s.status==='done'?'done':s.status==='error'?'error':'queued'}">${esc(s.status)}</span> ${esc(s.kind)} · ${esc(s.url.replace(/^https?:\/\//, "").slice(0, 46))}</span>
+      <span>${s.status === "error" || s.status === "done" ? `<button class="btn sm" data-retry="${s.id}">Again</button> ` : ""}<button class="btn sm danger" data-del="${s.id}">✕</button></span></div>`).join("")
+    : `<div class="help">The queue is empty.</div>`;
+  const wireQueue = () => {
+    document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { await api(`/api/assistant/sources/${b.dataset.del}`, {method: "DELETE"}); draw(); });
+    document.querySelectorAll("[data-retry]").forEach(b => b.onclick = async () => { await api(`/api/assistant/sources/${b.dataset.retry}/retry`, {method: "POST"}); draw(); });
+    if ($("#asToggle")) $("#asToggle").onclick = async () => {
+      const on = $("#asToggle").textContent.includes("on");
+      await api("/api/settings", {method: "POST", body: {"assistant.enabled": on}});
+      if (on) await api("/api/assistant/run-now", {method: "POST"});
+      toast(on ? "Assistant switched on" : "Assistant switched off", "ok"); draw(); };
+    if ($("#asNow")) $("#asNow").onclick = async () => { await api("/api/assistant/run-now", {method: "POST"}); toast("Checking now ...", "ok"); };
+    const post = async (url, body, msg) => { try { const r = await api(url, {method: "POST", body: body || {}}); toast(msg ? msg(r) : "Done", "ok"); } catch (e) { toast(e.message, "bad"); } draw(); };
+    if ($("#safeOn")) $("#safeOn").onclick = () => { if (confirm("Stop all uploads and new work?")) post("/api/safe", {on: true}, () => "Safe mode ON"); };
+    if ($("#safeOff")) $("#safeOff").onclick = () => post("/api/safe", {on: false}, () => "Safe mode off, the assistant continues");
+    if ($("#safePull")) $("#safePull").onclick = () => { if (confirm("Set every scheduled (not yet public) video back to private?")) post("/api/safe/pull-back", {}, r => `${r.pulled} video(s) pulled back` + (r.failed.length ? `, ${r.failed.length} failed` : "")); };
+    if ($("#safeRelease")) $("#safeRelease").onclick = () => post("/api/safe/release", {}, r => `${r.rescheduled} video(s) scheduled again, safe mode off`);
+    if ($("#cleanNow")) $("#cleanNow").onclick = () => post("/api/cleanup", {}, r => `Freed ${r.freed_mb} MB (${r.files} items), ${r.free_gb} GB free`);
+    if ($("#insRefresh")) $("#insRefresh").onclick = () => post("/api/insights/refresh", {}, r => `Stats updated for ${r.updated} video(s)`);
+    if ($("#insApply")) $("#insApply").onclick = () => post("/api/insights/apply-slots", {}, r => "Publish times now: " + r.slots.join(", "));
+  };
+  const scoreChart = h => {
+    if (!h.length) return `<div class="help">No reviewed clips yet.</div>`;
+    const W = 640, H = 150, pad = 26, n = h.length, x = i => pad + (n === 1 ? (W - 2 * pad) / 2 : i * (W - 2 * pad) / (n - 1)), y = v => H - 14 - (v / 100) * (H - 28);
+    const line = h.map((r, i) => `${x(i).toFixed(1)},${y(r.score).toFixed(1)}`).join(" ");
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:190px" role="img" aria-label="Review score of every clip over time">
+      ${[0, 50, 100].map(v => `<line x1="${pad}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="2" y="${y(v) + 4}" font-size="10" fill="var(--muted)">${v}</text>`).join("")}
+      <line x1="${pad}" x2="${W - pad}" y1="${y(65)}" y2="${y(65)}" stroke="var(--warn)" stroke-dasharray="4 4"/>
+      <polyline points="${line}" fill="none" stroke="var(--info)" stroke-width="1.5" opacity=".7"/>
+      ${h.map((r, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(r.score).toFixed(1)}" r="3.5" fill="${r.ok ? "var(--ok)" : "var(--bad)"}"><title>#${r.id} ${esc(r.category)}: ${r.score} ${esc(r.title)}</title></circle>`).join("")}
+    </svg><div class="help">Each dot is one clip (green = passed, red = problems). Dashed line = pass mark (65).</div>`;
+  };
+  const insightsHtml = ins => {
+    const bar = (v, max) => `<span style="display:inline-block;height:8px;border-radius:4px;background:var(--accent);width:${Math.max(2, Math.round(100 * (v || 0) / (max || 1)))}px;vertical-align:middle"></span>`;
+    const maxRate = Math.max(0.01, ...ins.categories.map(c => c.avg_rate || 0), ...ins.slots.map(c => c.avg_rate || 0));
+    const sg = ins.suggestion;
+    return `<div style="margin-top:10px">${scoreChart(ins.history)}
+      <h2 style="margin-top:14px">By category</h2>
+      ${ins.categories.length ? `<table class="tbl" style="width:100%"><tr><th align="left">Category</th><th>Clips</th><th>Avg score</th><th>Published</th><th>Views/hour</th><th>Avg views</th>${ins.analytics ? "<th>% watched</th>" : ""}</tr>
+        ${ins.categories.map(c => `<tr><td>${esc(c.category)}</td><td align="center">${c.clips}</td><td align="center">${c.avg_score ?? "-"}</td><td align="center">${c.published}</td>
+          <td>${c.avg_rate != null ? bar(c.avg_rate, maxRate) + " " + c.avg_rate : "-"}</td><td align="center">${c.avg_views ?? "-"}</td>${ins.analytics ? `<td align="center">${c.avg_pct ?? "-"}</td>` : ""}</tr>`).join("")}</table>` : `<div class="help">Nothing yet.</div>`}
+      <h2 style="margin-top:14px">By publish time (PKT)</h2>
+      ${ins.slots.length ? `<table class="tbl" style="width:100%"><tr><th align="left">Slot</th><th>Videos</th><th>Views/hour</th><th>Avg views</th><th>Avg likes</th></tr>
+        ${ins.slots.map(c => `<tr><td>${esc(c.key)}</td><td align="center">${c.n}</td><td>${bar(c.avg_rate, maxRate)} ${c.avg_rate}</td><td align="center">${c.avg_views}</td><td align="center">${c.avg_likes}</td></tr>`).join("")}</table>`
+        : `<div class="help">Results appear here ${ins.min_age_hours}+ hours after the first video is published and YouTube stats were read (needs YouTube login).</div>`}
+      <div class="help" style="margin-top:10px">${sg.change ? `💡 <b>Suggestion:</b> replace ${esc(sg.drop)} with ${esc(sg.add)} → ${esc(sg.slots.join(", "))}. ${esc(sg.reason)}` : esc(sg.reason)}
+        ${sg.change && ins.autotune !== "auto" ? ` <button class="btn sm fit" id="insApply">Apply</button>` : ""}</div>
+      <div class="actions" style="margin-top:8px"><button class="btn sm fit" id="insRefresh">🔄 Read YouTube stats now</button>
+        <span class="help" style="margin:0 0 0 8px">${ins.stats_ts ? "Last read " + new Date(ins.stats_ts * 1000).toLocaleString() : "Not read yet"} · auto-learn: ${esc(ins.autotune)}</span></div></div>`;
+  };
+  await draw();
+  const t = setInterval(() => { if (tab !== "assistant") return clearInterval(t); draw(); }, 5000);
+}
+
+// ------------------------------------------------------------------ NOTIFICATIONS (bell)
+let notes = {items: [], unread: 0}, lastNoteId = 0;
+async function refreshNotes() {
+  try {
+    notes = await api("/api/notifications");
+    const newest = notes.items[0] ? notes.items[0].id : 0;
+    if (lastNoteId && newest > lastNoteId) notes.items.filter(n => n.id > lastNoteId).reverse().forEach(n => {
+      toast(n.title + (n.body ? " — " + n.body.split("\n")[0] : ""), n.level === "error" ? "bad" : n.level === "ok" ? "ok" : "");
+      try { if (window.Notification && Notification.permission === "granted") new Notification(n.title, {body: n.body}); } catch (e) {}
+    });
+    lastNoteId = newest;
+    const b = $("#bell"); if (b) b.innerHTML = `🔔${notes.unread ? `<span class="badge">${notes.unread}</span>` : ""}`;
+  } catch (e) {}
+}
+function toggleNotes() {
+  let box = $("#noteBox");
+  if (box) { box.remove(); return; }
+  try { if (window.Notification && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
+  box = document.createElement("div"); box.id = "noteBox";
+  box.style.cssText = "position:fixed;left:240px;bottom:70px;width:380px;max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:14px;z-index:60";
+  box.innerHTML = `<div class="row"><b>Notifications</b><button class="btn sm fit" id="noteRead">Mark all read</button></div>` +
+    (notes.items.length ? notes.items.map(n => `<div style="padding:9px 0;border-bottom:1px solid var(--line);${n.read ? 'opacity:.6' : ''}"><b>${n.level === "error" ? "❌" : n.level === "warn" ? "⚠️" : n.level === "ok" ? "✅" : "ℹ️"} ${esc(n.title)}</b>
+      <div class="help" style="margin:2px 0;white-space:pre-wrap">${esc(n.body)}</div><div class="help" style="margin:0">${esc(fmtT(n.ts))}</div></div>`).join("") : `<div class="help" style="padding:10px 0">No notifications yet.</div>`);
+  document.body.appendChild(box);
+  $("#noteRead").onclick = async () => { await api("/api/notifications/read", {method: "POST"}); await refreshNotes(); box.remove(); };
+}
+
+// ------------------------------------------------------------------ boot
+async function refreshState() { try { S = await api("/api/state"); renderNav(); } catch (e) {} }
+document.getElementById("themeBtn").onclick = () => {
+  const r = document.documentElement, t = r.dataset.theme === "light" ? "dark" : "light";
+  r.dataset.theme = t; try { localStorage.setItem("theme", t); } catch (e) {}
+};
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("#bell").onclick = toggleNotes;
+refreshState().then(render); refreshNotes(); setInterval(refreshNotes, 8000);
+setInterval(refreshState, 5000);
+</script>
+</body>
+</html>

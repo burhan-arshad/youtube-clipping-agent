@@ -31,7 +31,7 @@ def ingest(src: Source, workdir: Path, cfg=None) -> Path:
         "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
         "--merge-output-format", "mp4",
         "-o", str(dest_dir / "video.%(ext)s"),
-        "--no-playlist", "--retries", "10", "--sleep-requests", "1",
+        "--no-playlist", "--retries", "10", "--sleep-requests", "1", "--newline",
         "--remote-components", "ejs:github",   # lets yt-dlp solve the YouTube JS challenge (needs deno/node)
     ]
     browser = (cfg.get("ingest.cookies_from_browser") if cfg else None)
@@ -41,7 +41,22 @@ def ingest(src: Source, workdir: Path, cfg=None) -> Path:
     elif browser:   # e.g. "chrome" / "edge" / "firefox": helps when YouTube answers 429 / "confirm you're not a bot"
         cmd += ["--cookies-from-browser", str(browser)]
     cmd += [src.url]
-    proc = subprocess.run(cmd)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace", bufsize=1)
+    last_step = -1
+    for line in proc.stdout:                       # show progress without flooding the log
+        line = line.rstrip()
+        if line.startswith("[download]") and "%" in line:
+            try:
+                step = int(float(line.split("%")[0].split()[-1]) // 10)
+            except ValueError:
+                step = -2
+            if step == last_step:
+                continue
+            last_step = step
+        if line:
+            print(line, flush=True)
+    proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(
             "yt-dlp could not download the video. Try: 1) pip install -U yt-dlp  2) wait a few minutes (YouTube "
