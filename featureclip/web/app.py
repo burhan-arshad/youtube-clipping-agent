@@ -514,6 +514,19 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         sf.write(buf, audio, sr, format="WAV")
         return {"audio": "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode(), "seconds": round(len(audio) / sr, 1)}
 
+    @app.post("/api/assistant/recheck-rejected")
+    def recheck_rejected():
+        """Give clips that the (old, too strict) review rejected a second chance with the new review rules."""
+        st = store()
+        n = 0
+        for x in st.clips(status="rejected"):
+            if x["path"] and Path(x["path"]).is_file() and str(x["error"] or "").startswith("assistant review"):
+                st.update_clip(x["id"], status="ready", review=None, error=None, rebuilds=0)
+                st.kv_set(f"rv:{x['id']}", "0")
+                n += 1
+        assistant.wake()
+        return {"requeued": n}
+
     @app.post("/api/safe")
     def safe_set(body: dict = Body(...)):
         st = store()
@@ -611,7 +624,13 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                         for k, lb in activity.STEPS]
         future = [x for x in st.clips(status="uploaded") if x["scheduled_at"] and x["scheduled_at"] > now]
         nxt = min((x["scheduled_at"] for x in future), default=None)
-        out["counters"] = {"in_review": len(st.clips(status="ready")), "approved": len(st.clips(status="approved")),
+        def _needs(x):
+            try:
+                return bool(json.loads(x["review"] or "null").get("needs_you"))
+            except Exception:
+                return False
+        needs_you = sum(1 for x in st.clips(status="ready") if _needs(x))
+        out["counters"] = {"needs_you": needs_you, "in_review": len(st.clips(status="ready")) - needs_you, "approved": len(st.clips(status="approved")),
                            "scheduled": len(future), "uploaded": len(st.clips(status="uploaded")),
                            "rejected": len(st.clips(status="rejected")),
                            "next_publish": sched.fmt_pkt(__import__("datetime").datetime.fromtimestamp(nxt, __import__("datetime").timezone.utc)) if nxt else ""}

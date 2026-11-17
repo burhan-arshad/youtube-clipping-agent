@@ -55,7 +55,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": False,
         "mode": "auto",                 # auto = approve + schedule by itself; ask = only review, I approve
         "review_strictness": "normal",  # normal | strict
-        "max_rebuilds": 1,              # how many times it re-makes a clip that failed review
+        "max_rebuilds": 2,              # how many times it re-makes a clip that failed review
         "buffer_days": 2,               # notify me when less than this many days of clips are left
         "check_every_seconds": 60,
     },

@@ -633,7 +633,7 @@ async function viewAssistant() {
       ${L.warning ? `<div style="margin-top:10px;padding:9px 12px;border-radius:10px;background:rgba(255,107,107,.1);border:1px solid var(--bad);font-size:13px"><b>⚠️ Problem:</b> ${esc(L.warning)}</div>` : ""}
       <div class="steps">${L.steps.map((s, i) => `${i ? '<span style="color:var(--muted)">›</span>' : ""}<span class="step ${s.state}">${s.state === "done" ? "✓" : s.state === "active" ? "●" : ""} ${esc(s.label)}</span>`).join("")}</div>
       ${L.assistant && L.mode === "job" ? `<div class="help" style="margin:0 0 8px">🤖 At the same time the assistant is: <b>${esc(L.assistant.text)}</b> (${fmtDur(L.now - L.assistant.since)})</div>` : ""}
-      <div class="cnt"><span><b>${L.counters.in_review}</b> in review</span><span><b>${L.counters.approved}</b> approved</span><span><b>${L.counters.scheduled}</b> scheduled</span>
+      <div class="cnt">${L.counters.needs_you ? `<span style="color:var(--warn)"><b>${L.counters.needs_you}</b> need your decision</span>` : ""}<span><b>${L.counters.in_review}</b> in review</span><span><b>${L.counters.approved}</b> approved</span><span><b>${L.counters.scheduled}</b> scheduled</span>
         <span><b>${L.counters.uploaded}</b> uploaded</span><span><b>${L.counters.rejected}</b> rejected</span>${L.counters.next_publish ? `<span>next public: <b>${esc(L.counters.next_publish)}</b></span>` : ""}</div>
       <div class="grid2" style="margin-top:14px;gap:16px">
         <div><div class="help" style="margin:0 0 4px"><b>Video work (live log)</b></div><div class="feed">${L.feed.length ? L.feed.map(f => `<div><span class="t">${esc(f.t)}</span><span>${esc(f.text)}</span></div>`).join("") : '<div class="help">No video work running.</div>'}</div></div>
@@ -707,7 +707,8 @@ async function viewAssistant() {
         ${a.safe.held.length ? `<button class="btn sm fit" id="safeRelease">Re-schedule ${a.safe.held.length} held video(s) and resume</button>` : ""}</div>`
       : `<div style="margin-top:10px"><button class="btn sm fit danger" id="safeOn">🛑 Safe mode</button>
         <span class="help" style="margin-left:8px">One click stops all uploads and new work.</span></div>`}
-    <div class="help" style="margin-top:8px">💾 Free disk: <b>${a.disk.free_gb} GB</b>${a.disk.last ? ` · last cleanup freed ${a.disk.last.freed_mb} MB` : ""} <button class="btn sm fit" id="cleanNow" style="margin-left:6px">Clean now</button></div>
+    <div class="help" style="margin-top:8px">💾 Free disk: <b>${a.disk.free_gb} GB</b>${a.disk.last ? ` · last cleanup freed ${a.disk.last.freed_mb} MB` : ""} <button class="btn sm fit" id="cleanNow" style="margin-left:6px">Clean now</button>
+      <button class="btn sm fit" id="recheck" style="margin-left:6px" title="Review the rejected clips again with the newer, fairer rules">♻ Re-check rejected clips</button></div>
     <div class="help" style="margin-top:8px">${esc(a.state.message || "")} ${a.state.tick_error ? `<span style="color:var(--bad)">· ${esc(a.state.tick_error)}</span>` : ""}</div>
     <div class="chips" style="margin:12px 0 0"><span class="pill ready">${a.counts.ready} in review</span><span class="pill approved">${a.counts.approved} approved</span>
       <span class="pill uploaded">${a.counts.uploaded} uploaded</span><span class="pill rejected">${a.counts.rejected} rejected</span></div>`;
@@ -729,6 +730,7 @@ async function viewAssistant() {
     if ($("#safeOff")) $("#safeOff").onclick = () => post("/api/safe", {on: false}, () => "Safe mode off, the assistant continues");
     if ($("#safePull")) $("#safePull").onclick = () => { if (confirm("Set every scheduled (not yet public) video back to private?")) post("/api/safe/pull-back", {}, r => `${r.pulled} video(s) pulled back` + (r.failed.length ? `, ${r.failed.length} failed` : "")); };
     if ($("#safeRelease")) $("#safeRelease").onclick = () => post("/api/safe/release", {}, r => `${r.rescheduled} video(s) scheduled again, safe mode off`);
+    if ($("#recheck")) $("#recheck").onclick = () => post("/api/assistant/recheck-rejected", {}, r => `${r.requeued} clip(s) sent back for a fair re-check`);
     if ($("#cleanNow")) $("#cleanNow").onclick = () => post("/api/cleanup", {}, r => `Freed ${r.freed_mb} MB (${r.files} items), ${r.free_gb} GB free`);
     if ($("#insRefresh")) $("#insRefresh").onclick = () => post("/api/insights/refresh", {}, r => `Stats updated for ${r.updated} video(s)`);
     if ($("#insApply")) $("#insApply").onclick = () => post("/api/insights/apply-slots", {}, r => "Publish times now: " + r.slots.join(", "));

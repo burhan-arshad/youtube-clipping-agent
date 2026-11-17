@@ -171,3 +171,38 @@ def test_ai_unavailable_keeps_clip_for_next_pass(tmp_path):
     agent.Assistant(tmp_path, None, FakeJobs())._review(cfg, st, Down([]), StubPipe(tmp_path), Notifier(cfg, st))
     c = st.clip(cid)
     assert c["status"] == "ready" and not c["review"]
+
+
+def test_minor_remarks_never_block_a_good_clip(tmp_path):
+    from featureclip.notify import Notifier
+    cfg, st, cid = _clean_clip(tmp_path)
+    a = agent.Assistant(tmp_path, None, FakeJobs())
+    issues = [{"type": "video", "severity": "minor", "text": "caption slightly cut"},
+              {"type": "thumbnail", "severity": "blocker", "text": "weak thumbnail"}]      # thumbnail can never be a blocker
+    a._review(cfg, st, FakeLLM([{"score": 88, "issues": issues}]), StubPipe(tmp_path), Notifier(cfg, st))
+    c = st.clip(cid)
+    rv = json.loads(c["review"])
+    assert c["status"] == "approved" and rv["ok"] and rv["blockers"] == 0 and len(rv["issues"]) == 2
+
+
+def test_wording_problems_are_repaired_in_code_not_rejected(tmp_path):
+    from featureclip.notify import Notifier
+    cfg, st, cid = _clean_clip(tmp_path)
+    st.update_clip(cid, title="Cars #crash hard in the city #Shorts", description="short")
+    a = agent.Assistant(tmp_path, None, FakeJobs())
+    a._review(cfg, st, FakeLLM([{"score": 90, "issues": []}]), StubPipe(tmp_path), Notifier(cfg, st))
+    c = st.clip(cid)
+    assert c["status"] == "approved" and "#crash" not in c["title"] and c["title"].endswith("#Shorts")
+    assert "GTA 6" in c["title"] and len(c["description"]) >= 80 and "http" not in c["description"]
+
+
+def test_serious_problem_after_rebuilds_waits_for_the_owner(tmp_path):
+    from featureclip.notify import Notifier
+    cfg, st, cid = _clean_clip(tmp_path)
+    st.update_clip(cid, rebuilds=2)                         # rebuild budget already used
+    a = agent.Assistant(tmp_path, None, FakeJobs())
+    bad = {"score": 70, "issues": [{"type": "script", "severity": "blocker", "text": "voice talks about a chase not shown"}]}
+    a._review(cfg, st, FakeLLM([bad]), StubPipe(tmp_path), Notifier(cfg, st))
+    c = st.clip(cid)
+    assert c["status"] == "ready" and json.loads(c["review"])["needs_you"] is True      # kept, not rejected
+    assert any("needs your decision" in n["title"] for n in st.notifications(10))

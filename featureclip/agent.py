@@ -26,26 +26,30 @@ from .notify import Notifier
 from .store import Store
 
 REVIEW_PROMPT = """You are the final quality reviewer of a YouTube Shorts channel about {game}. The images are frames
-of the finished vertical video in time order (the last image is the thumbnail, if there is one).
+of the finished vertical video in time order{times_note} (the last image is the thumbnail, if there is one).
 
 Title: {title}
 Description:
 {description}
-Voice-over script: {script}
+Voice-over (each line with the second it is spoken):
+{script}
 Feature the clip claims to show: {feature}
+{timeline_block}
+THE LAYOUT IS INTENDED, do not report it: the gameplay sits in a window over a blurred copy of the same footage,
+with the heading text above and the channel handle below, and burned-in captions. That is not "letterboxing",
+"a second window" or "overlapping branding".
 
-Check strictly and report every problem:
-- video: a real person (streamer/webcam face), chat, donation/follower alert, streamer logo or name visible
-- video: black bars, a second window, a menu, a loading screen, or mostly empty/boring gameplay
-- video: the heading text at the top is cut off, unreadable or overlapping; captions cut off or unreadable
-- script: the voice-over says something that is not visible in the frames
-- metadata: the title or description promises something that is not shown, is clickbait that is not true, claims leaks or
-  official information, or has spelling mistakes
-- thumbnail: unreadable text, misleading, unrelated to the video
-- policy: very graphic gore, sexual content, slurs/hate, real-world violence, or anything YouTube would age-restrict or demonetize
+Report only real problems. Give every issue a severity:
+- "blocker": a real person (streamer/webcam face), chat, donation alert, streamer name/logo is visible | the voice-over
+  states something that the frames/timeline clearly contradict or show only LATER than it is spoken | the title or
+  description promises something that is not shown or claims leaks/official information | a loading screen, menu, or
+  almost nothing happening | very graphic gore, sexual content, slurs, real-world violence (type "policy").
+- "minor": anything cosmetic or uncertain: caption or heading slightly cut, a weak thumbnail, a typo, wording you would
+  phrase differently, something you cannot be sure of from only a few frames.
+If you are not sure, it is "minor". Do not invent problems.
 
 Return JSON only:
-{{"score": 0-100 overall quality, "issues": [{{"type": "video|script|metadata|thumbnail|policy", "text": "short, specific"}}]}}
+{{"score": 0-100 overall quality, "issues": [{{"type": "video|script|metadata|thumbnail|policy", "severity": "blocker|minor", "text": "short, specific"}}]}}
 An empty issues list means you found nothing wrong."""
 
 
@@ -84,17 +88,19 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
     for ch in checks:
         if not ch["ok"]:
             t = "metadata" if "title" in ch["name"] else ("thumbnail" if "thumbnail" in ch["name"] else "video")
-            issues.append({"type": t, "text": f"{ch['name']}: {ch['detail'] or 'failed'}"})
+            issues.append({"type": t, "severity": "blocker", "text": f"{ch['name']}: {ch['detail'] or 'failed'}"})
     score = 100
     if c["path"] and Path(c["path"]).is_file():
         dur = probe(c["path"])["duration"]
         tmp.mkdir(parents=True, exist_ok=True)
         imgs = []
-        for i, f in enumerate((0.08, 0.28, 0.5, 0.72, 0.92)):
+        fr_times = []
+        for i, f in enumerate((0.05, 0.18, 0.31, 0.44, 0.57, 0.7, 0.83, 0.95)):
             dst = tmp / f"rv_{i}.jpg"
             try:
-                grab_frame(c["path"], dur * f, dst, 540)
+                grab_frame(c["path"], dur * f, dst, 480)
                 imgs.append(dst.read_bytes())
+                fr_times.append(dur * f)
             except Exception:
                 pass
         if c["thumb"] and Path(c["thumb"]).is_file():
@@ -105,8 +111,15 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
             im.save(p, quality=80)
             imgs.append(p.read_bytes())
         j = json.loads(c["judgement"]) if c["judgement"] else {}
+        beats = j.get("beats") if j.get("beats_script") == c["script"] else None
+        script_txt = ("\n".join(f"  at {b['at']:.1f}s: {b['text']}" for b in beats) if beats else (c["script"] or ""))
+        tl = j.get("timeline_clip") or []
+        timeline_block = ("What the picture shows, from a separate frame-by-frame analysis (trust this):\n"
+                          + "\n".join(f"  {t:.1f}s: {w}" for t, w in tl) + "\n") if tl else ""
+        times_note = " (frames at " + ", ".join(f"{t:.0f}s" for t in fr_times) + ")" if fr_times else ""
         prompt = REVIEW_PROMPT.format(game=cfg.get("game.name", "the game"), title=c["title"], description=c["description"],
-                                      script=c["script"], feature=j.get("feature_name", ""))
+                                      script=script_txt, feature=j.get("feature_name", ""),
+                                      timeline_block=timeline_block, times_note=times_note)
         raw = llm.json(prompt, images=imgs or None, temperature=0.1)
         try:
             score = float(raw.get("score", 0))
@@ -115,13 +128,13 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
         for it in raw.get("issues") or []:
             if isinstance(it, dict):
                 t = str(it.get("type", "video")).lower()
-                issues.append({"type": t if t in ("video", "script", "metadata", "thumbnail", "policy") else "video",
-                               "text": str(it.get("text", ""))[:200]})
+                t = t if t in ("video", "script", "metadata", "thumbnail", "policy") else "video"
+                sev = "blocker" if (t == "policy" or (str(it.get("severity", "")).lower() == "blocker" and t != "thumbnail")) else "minor"
+                issues.append({"type": t, "severity": sev, "text": str(it.get("text", ""))[:200]})
     need = 80 if str(cfg.get("assistant.review_strictness", "normal")) == "strict" else 65
-    ok = not issues and score >= need
-    if issues and score >= need + 15 and all(i["type"] == "thumbnail" for i in issues):
-        ok = True                          # a weak thumbnail alone must not block a good Short (Shorts ignore it anyway)
-    return {"ok": ok, "score": score, "issues": issues, "checks": checks, "ts": time.time()}
+    blockers = [i for i in issues if i.get("severity") == "blocker"]
+    ok = not blockers and score >= need      # minor remarks are kept as notes but never stop a good Short
+    return {"ok": ok, "score": score, "issues": issues, "blockers": len(blockers), "checks": checks, "ts": time.time()}
 
 
 from . import cleanup, insights, safe  # noqa: E402
@@ -288,6 +301,7 @@ class Assistant:
                 continue
             tmp = pipe.cdir(c["video_id"], c["id"]) / "review"
             self._phase("review", f"Checking clip {c['id']}: {(c['title'] or '')[:60]}")
+            c = self._repair_wording(cfg, store, pipe, c)
             try:
                 rv = review_clip(llm, cfg, c, tmp, store)
             except LLMError as e:
@@ -303,16 +317,19 @@ class Assistant:
                     store.update_clip(c["id"], status="approved")
                     store.kv_set("reject_streak", "0")
                 continue
-            types = {i["type"] for i in rv["issues"]}
-            summary = "; ".join(i["text"] for i in rv["issues"])[:300]
+            blockers = [i for i in rv["issues"] if i.get("severity") == "blocker"]
+            types = {i["type"] for i in blockers}
+            summary = "; ".join(i["text"] for i in (blockers or rv["issues"]))[:300]
             store.kv_set(f"rv:{c['id']}", str(attempts + 1))
-            self._event("warn", f"Clip {c['id']} has problems: {summary[:120]}")
-            if types <= {"metadata", "thumbnail"} and attempts < 2 and c["judgement"]:
-                self._event("info", f"Clip {c['id']}: writing a new title/description/thumbnail")
-                self._fix_metadata(cfg, store, llm, pipe, c)
-                store.update_clip(c["id"], review=None)       # review again next pass
+            self._event("warn", f"Clip {c['id']}: {len(blockers)} serious / {len(rv['issues']) - len(blockers)} minor remark(s): {summary[:110]}")
+            if "policy" in types:
+                store.update_clip(c["id"], review=rv)
+                if mode == "auto":
+                    store.update_clip(c["id"], status="rejected", error="assistant review: " + summary)
+                    self._event("bad", f"Clip {c['id']} rejected (policy)")
+                    notifier.send("warn", f"Assistant rejected clip {c['id']}", f"{c['title'] or ''}\n{summary}")
                 continue
-            if types & {"video", "script"} and "policy" not in types and c["rebuilds"] < max_rebuilds and mode == "auto":
+            if types & {"video", "script", "metadata"} and c["rebuilds"] < max_rebuilds and mode == "auto" and c["judgement"]:
                 store.update_clip(c["id"], status="judged", rebuilds=c["rebuilds"] + 1, error=None, script=None,
                                   review=None)
                 self._phase("build", f"Re-making clip {c['id']} to fix: {summary[:80]}")
@@ -324,16 +341,33 @@ class Assistant:
                 except Exception as e:
                     store.update_clip(c["id"], status="error", error=f"rebuild: {e}")
                 continue
+            if types <= {"metadata"} and attempts < 2 and c["judgement"]:
+                self._event("info", f"Clip {c['id']}: writing a new title/description/thumbnail")
+                self._fix_metadata(cfg, store, llm, pipe, c)
+                store.update_clip(c["id"], review=None)       # review again next pass
+                continue
+            # Serious problems that could not be fixed automatically: do NOT throw the clip away.
+            # It stays in "Clips" waiting for you (Approve anyway / Rebuild / Reject).
+            rv["needs_you"] = True
             store.update_clip(c["id"], review=rv)
-            if mode == "auto":
-                store.update_clip(c["id"], status="rejected", error="assistant review: " + summary)
-                self._event("bad", f"Clip {c['id']} rejected")
-                notifier.send("warn", f"Assistant rejected clip {c['id']}", f"{c['title'] or ''}\n{summary}")
-                streak = int(store.kv_get("reject_streak", "0") or 0) + 1
-                store.kv_set("reject_streak", str(streak))
-                if cfg.get("safe.auto", True) and streak >= int(cfg.get("safe.reject_streak", 8)):
-                    safe.turn_on(store, f"{streak} clips in a row were rejected: quality problem")
-                    notifier.send("error", "Safe mode switched on", f"{streak} rejected clips in a row. Check the source or settings, then switch safe mode off.")
+            self._event("bad", f"Clip {c['id']} needs your decision: {summary[:100]}")
+            notifier.send("warn", f"Clip {c['id']} needs your decision",
+                          f"{c['title'] or ''}\n{summary}\nOpen Clips: approve it anyway, rebuild it or reject it.")
+
+    def _repair_wording(self, cfg, store, pipe, c):
+        """Title/description rule problems are fixed in code (no AI, no rejection)."""
+        game = str(cfg.get("game.name", "") or "")
+        probs = metadata.validate({"title": c["title"] or "", "description": c["description"] or ""}, game)
+        if not probs or not c["judgement"]:
+            return c
+        j = json.loads(c["judgement"])
+        video = store.video(c["video_id"])
+        src = pipe.sources.get(video["source_id"]) if video else None
+        fixed = metadata.sanitize({"title": c["title"] or "", "description": c["description"] or ""}, game,
+                                  str(cfg.get("upload.title_suffix", "") or ""), j, cfg, src.streamer if src else "")
+        store.update_clip(c["id"], title=fixed["title"], description=fixed["description"])
+        self._event("info", f"Clip {c['id']}: wording fixed automatically ({'; '.join(probs)[:80]})")
+        return store.clip(c["id"])
 
     def _fix_metadata(self, cfg, store, llm, pipe, c) -> None:
         j = json.loads(c["judgement"])

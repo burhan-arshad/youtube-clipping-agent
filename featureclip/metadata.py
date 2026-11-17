@@ -70,7 +70,7 @@ def validate(meta: dict, game: str) -> list[str]:
         p.append(f"title length {len(t)} (want 40-70)")
     if game and not mentions_game(t, game):
         p.append(f"title must contain '{game}'")
-    if "#" in re.sub(r"\s+#shorts\s*$", "", t, flags=re.I):      # the trailing " #Shorts" is added on purpose
+    if "#" in re.sub(r"(\s+#\w+)+\s*$", "", t):      # hashtags at the very end are the suffix added on purpose
         p.append("no hashtags in the title")
     d = meta.get("description", "")
     if len(d) < 80:
@@ -78,6 +78,38 @@ def validate(meta: dict, game: str) -> list[str]:
     if len(re.findall(r"#\w+", d)) > 12:
         p.append("too many hashtags")
     return p
+
+
+def sanitize(meta: dict, game: str, suffix: str, judgement: dict, cfg, streamer: str = "") -> dict:
+    """Repair title/description rule problems without the AI, so a good video is never lost to wording."""
+    title = _clean(meta.get("title", ""))
+    if suffix and title.endswith(suffix.strip()):
+        title = title[: -len(suffix.strip())].rstrip()
+    title = re.sub(r"\s*#\w+", "", title).strip(" -:|")
+    if game and not mentions_game(title, game):
+        title = f"{game}: {title}" if title else f"{game}: {judgement.get('feature_name', 'gameplay detail')}"
+    room = 95 - len(suffix)
+    if len(title) > room:
+        title = title[:room].rsplit(" ", 1)[0].rstrip(",;:-")
+    if len(title) < 20:
+        title = f"{title} - {judgement.get('feature_name', '')}".strip(" -")[:room]
+    desc = str(meta.get("description", "") or "").strip()
+    if len(desc) < 80:
+        desc = build_description_plain(judgement, streamer, cfg)
+    tags_line = re.findall(r"#\w+", desc)
+    if len(tags_line) > 12:
+        keep = 0
+        def _cut(m):
+            nonlocal keep
+            keep += 1
+            return m.group(0) if keep <= 12 else ""
+        desc = re.sub(r"#\w+", _cut, desc)
+    return {**meta, "title": (title + suffix)[:100], "description": desc[:4900]}
+
+
+def build_description_plain(judgement: dict, streamer: str, cfg) -> str:
+    from .uploader import build_description
+    return build_description(judgement, streamer, "", cfg)
 
 
 def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: str = "", credit_url: str = "") -> dict:

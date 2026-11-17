@@ -68,5 +68,15 @@
   "facecam": "",
   "crop": null,
   "extra": {}
+ },
+ "web-958960b9": {
+  "id": "web-958960b9",
+  "streamer": "BombaeDuck",
+  "url": "https://www.youtube.com/watch?v=dVGiDg9P4sk",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@BombaeDuck",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
  }
 }
