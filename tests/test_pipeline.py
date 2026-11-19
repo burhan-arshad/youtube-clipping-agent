@@ -168,3 +168,71 @@ def test_real_kokoro(cfg, tmp_path):
     cfg.data["narration"]["engine"] = "kokoro"
     n = narrate.synthesize(cfg, SCRIPT, tmp_path / "v.wav", max_duration=30)
     assert 8 < n.duration < 30 and len(n.words) == len(SCRIPT.split())
+
+
+def test_launch_mode_now_then_hourly_then_normal_slots(env, monkeypatch):
+    from featureclip import launch
+    cfg, store, sources, llm, p = env
+    p.run("synthetic")
+    ids = [c["id"] for c in store.clips(status="ready")]
+    p.approve(ids)
+    launch.start(store, count=2, gap=60)
+    bodies = []
+    monkeypatch.setattr(pl.uploader, "upload_full",
+                        lambda path, body, c, thumb=None: (bodies.append(body) or
+                            {"id": f"v{len(bodies)}", "privacy": body["status"]["privacyStatus"],
+                             "publish_at": body["status"].get("publishAt"), "thumb_ok": None, "thumb_error": ""}))
+    n = p.upload()
+    assert n == len(ids) and n >= 2
+    assert bodies[0]["status"]["privacyStatus"] == "public" and "publishAt" not in bodies[0]["status"]
+    assert bodies[1]["status"]["privacyStatus"] == "private" and "publishAt" in bodies[1]["status"]
+    from datetime import datetime, timezone
+    t1 = datetime.strptime(bodies[1]["status"]["publishAt"], "%Y-%m-%dT%H:%M:%S.000Z").replace(tzinfo=timezone.utc)
+    assert 50 * 60 <= (t1 - datetime.now(timezone.utc)).total_seconds() <= 62 * 60       # about one hour later
+    assert launch.status(store)["active"] is False                                       # launch finished
+
+
+def test_launch_reschedules_existing_videos(env):
+    from featureclip import launch
+    cfg, store, sources, llm, p = env
+    import time
+    vid = store.add_video("x", "/tmp/x.mp4", {"duration": 60, "width": 1280, "height": 720, "fps": 30})
+    now = time.time()
+    cids = []
+    for i in range(4):
+        cid = store.add_clip(vid, 0, 20, 1.0)
+        store.update_clip(cid, status="uploaded", youtube_id=f"y{i}", scheduled_at=now + 86400 + i * 3600)
+        cids.append(cid)
+    calls = []
+    launch.start(store, 3, 60, now)
+    r = launch.reschedule_existing(cfg, store, setter=lambda c, v, at, public=False: calls.append((v, at, public)), now=now)
+    assert r["moved"] == 4 and not r["failed"]
+    assert calls[0] == ("y0", None, True)                         # first one public right now
+    assert calls[1][1] and calls[2][1] and calls[1][2] is False   # next two scheduled (1 h and 2 h)
+    assert calls[3][1] and calls[3][1] != calls[2][1]             # fourth one goes to a normal slot (its time depends on the clock)
+
+
+def test_upload_limit_pauses_uploads_without_failing_clips(env, monkeypatch):
+    cfg, store, sources, llm, p = env
+    p.run("synthetic")
+    ids = [c["id"] for c in store.clips(status="ready")]
+    p.approve(ids)
+    calls = []
+
+    def boom(path, body, c, thumb=None):
+        calls.append(1)
+        raise RuntimeError('<HttpError 400 "The user has exceeded the number of videos they may upload." reason uploadLimitExceeded>')
+    monkeypatch.setattr(pl.uploader, "upload_full", boom)
+    assert p.upload() == 0
+    assert len(calls) == 1                                           # stops at the first limit error
+    assert p.upload_results[0]["limit"] is True
+    assert all(store.clip(i)["status"] == "approved" for i in ids)   # nothing lost, nothing marked failed
+    assert p.upload() == 0 and len(calls) == 1                       # paused: no new attempt (saves API quota)
+    from featureclip import extras
+    assert "upload" in extras.humanize_error("uploadLimitExceeded").lower()
+
+
+def test_quality_gate_skips_boring_clips_but_keeps_best_two(env):
+    cfg, store, sources, llm, p = env
+    from featureclip import judge as jd
+    assert float(cfg.get("judge.quality_floor")) == 55 and int(cfg.get("judge.keep_min")) == 2

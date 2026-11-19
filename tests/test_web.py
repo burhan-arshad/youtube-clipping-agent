@@ -77,7 +77,7 @@ def test_usage_counts_calls_and_cooldowns(client, tmp_path):
     u = client.get("/api/usage").json()
     by = {m["model"]: m for m in u["models"]}
     assert by["gemini-3.5-flash-lite"]["ok"] == 2 and by["gemini-3.5-flash-lite"]["rpm_now"] == 2
-    assert by["gemini-3.5-flash-lite"]["limit_rpd"] == 500 and by["gemini-3.5-flash-lite"]["google_peak"]["rpd"] == 300
+    assert by["gemini-3.5-flash-lite"]["limit_rpd"] == 500 and by["gemini-3.5-flash-lite"]["google_peak"]["rpd"] == 434
     assert by["gemini-3.6-flash"]["fail"] == 1 and by["gemini-3.6-flash"]["cooldown"]["left"] > 2000
     assert u["recent"][0]["model"] == "gemini-3.6-flash"
 

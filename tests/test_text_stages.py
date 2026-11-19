@@ -126,7 +126,7 @@ def test_ass_structure(cfg):
     assert "PlayResX: 1080" in ass and "PlayResY: 1920" in ass
     assert ass.count("Dialogue:") == len(words) + 1                # one per word + the hook
     assert "CAR DAMAGE IS" in ass and "WILD" in ass
-    assert "{\\c&H00E6FF&}one{\\c&HFFFFFF&} two three" in ass       # active word highlighted
+    assert "{\\c&H00E6FF&\\fscx100\\fscy100\\t(0,90,\\fscx112\\fscy112)}one{\\c&HFFFFFF&\\fscx100\\fscy100} two three" in ass  # active word highlighted + pop
     assert "{" not in captions._esc("a{b}c")
 
 

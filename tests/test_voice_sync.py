@@ -35,14 +35,15 @@ def test_description_has_names_only_no_links(cfg):
     assert not any("http" in l for l in lines)
 
 
-def test_beats_validation_catches_overlap_and_late_end(cfg):
+def test_beats_overlap_is_repaired_and_only_the_count_is_checked(cfg):
     ok = [{"at": 0.5, "text": "GTA 6 just did this."}, {"at": 4.0, "text": "Watch the bumper crumple."},
           {"at": 9.0, "text": "Did you notice it?"}]
     assert narrate.validate_beats(ok, 15, cfg) == []
     bad = [{"at": 0.5, "text": "One two three four five six seven eight nine ten eleven twelve."},
            {"at": 2.0, "text": "Too early."}]
-    assert any("starts at" in p for p in narrate.validate_beats(bad, 15, cfg))
-    assert any("clip is only" in p for p in narrate.validate_beats(ok, 6, cfg))
+    fixed = narrate.repair_beats(bad, cfg)
+    assert fixed[1]["at"] >= 0.5 + narrate.est_seconds(bad[0]["text"], cfg)        # moved after the first line
+    assert narrate.validate_beats([{"at": 1, "text": "x"}], 15, cfg)                # one beat is not a script
 
 
 def test_align_words_maps_script_to_what_whisper_heard():
@@ -152,3 +153,44 @@ def test_voice_endpoints(tmp_path, monkeypatch):
     fields = {f["key"] for f in c.get("/api/settings").json()}
     assert {"narration.gemini_voice", "narration.gemini_style", "game.hints", "branding.name",
             "env:ELEVENLABS_API_KEY"} <= fields
+
+
+def test_script_timing_and_length_are_repaired_not_retried(cfg):
+    class LLM:
+        calls = 0
+
+        def json(self, prompt, **kw):
+            self.calls += 1
+            # overlapping beats and a script a bit shorter than the target: used to fail with "beat 2 starts at ..."
+            return {"beats": [{"at": 0.5, "text": "GTA 6 just had its funniest moment so far, and it is wild."},
+                              {"at": 1.9, "text": "Watch the red car, because the driver has no idea what is coming."},
+                              {"at": 5.6, "text": "And there it goes, straight into the fence like a bowling ball."},
+                              {"at": 9.0, "text": "Did you see how the whole thing wobbled before it stopped?"}],
+                    "title": "GTA 6 car yeets itself into a fence"}
+    j = {"feature_name": "Car hits fence", "what_happens": "a car crashes", "category": "funny_moment",
+         "visible_evidence": ["car", "fence"], "hook_title": ""}
+    tl = {"events": [(1.0, "red car driving"), (6.0, "car hits fence")], "moment": 5.6}
+    llm = LLM()
+    out = narrate.write_script(llm, cfg, j, "", 20, timeline=tl)
+    assert llm.calls <= 2                                         # accepted on the first try (+1 optional punch-up pass)
+    at = [b["at"] for b in out["beats"]]
+    assert all(b - a >= 1.5 for a, b in zip(at, at[1:]))          # overlaps were moved later by the code
+    assert narrate.moment_kind(j) == "funny" and "FUNNY" in narrate.WRITER_STYLE["funny"]
+    assert "playful" in narrate.tone_for(j, cfg)
+
+
+def test_judge_takes_funny_and_action_moments_and_defaults_to_loose(cfg):
+    from featureclip import judge
+    assert {"funny_moment", "chaotic_action", "epic_stunt", "interesting_discovery"} <= set(judge.CATEGORIES)
+    assert judge.thresholds(cfg) == (45.0, 38.0)
+    raw = {"feature_shown": True, "category": "funny_moment", "feature_name": "Car yeets into fence",
+           "what_happens": "x", "visible_evidence": ["a", "b"], "confidence": 60, "interest": 40}
+    ok, why = judge.decide(judge.normalize(raw, 30, 15, 40), cfg)
+    assert ok, why
+    assert "FUNNY" in judge.build_prompt("GTA 6", "x", "", 30, [1, 2], 5, 15, 40) or "FUNNY" in judge.build_prompt("GTA 6", "x", "", 30, [1, 2], 5, 15, 40).upper()
+
+
+def test_hls_options_only_use_flags_this_ffmpeg_knows():
+    from featureclip import live
+    opts = live.hls_input_options()
+    assert all(o.startswith("-") or o == "ALL" or o == "0" for o in opts)

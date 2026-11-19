@@ -21,6 +21,8 @@ ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
 # Needed to change a video's visibility/schedule after upload (safe mode "pull back").
 # youtube.upload alone cannot do videos.update; "youtube" covers it. Added only when upload.manage_videos is on.
 MANAGE_SCOPE = "https://www.googleapis.com/auth/youtube"
+# Needed to post the first comment (upload.first_comment). Added only when that option is on.
+COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 
 
 def scopes_for(cfg) -> list[str]:
@@ -29,12 +31,16 @@ def scopes_for(cfg) -> list[str]:
         sc.append(ANALYTICS_SCOPE)
     if cfg.get("upload.manage_videos", False):
         sc.append(MANAGE_SCOPE)
+    if cfg.get("upload.first_comment", False):
+        sc.append(COMMENT_SCOPE)
     return sc
 
 
 def build_title(hook: str, feature: str, suffix: str) -> str:
+    from .metadata import norm_suffix
+    suffix = norm_suffix(suffix)
     base = (hook or feature or "Gameplay feature").strip()
-    base = re.sub(r"\s+", " ", base)
+    base = re.sub(r"\s*#\w+", "", re.sub(r"\s+", " ", base)).strip()
     room = 100 - len(suffix)
     if len(base) > room:
         base = base[: room - 1].rstrip() + "…"
@@ -49,7 +55,8 @@ def build_description(judgement: dict, streamer: str, credit_url: str, cfg) -> s
     return "\n".join(lines).strip()[:4900]
 
 
-def build_body(title: str, description: str, cfg, tags: list[str] | None = None, publish_at: str | None = None) -> dict:
+def build_body(title: str, description: str, cfg, tags: list[str] | None = None, publish_at: str | None = None,
+               public: bool = False) -> dict:
     """publish_at: ISO UTC time. YouTube only accepts a schedule on a private video, so the video is uploaded
     private and YouTube flips it to public at that time (the laptop can be off by then)."""
     up = lambda k, d=None: cfg.get(f"upload.{k}", d)  # noqa: E731
@@ -57,6 +64,8 @@ def build_body(title: str, description: str, cfg, tags: list[str] | None = None,
         "privacyStatus": up("privacy", "private"),
         "selfDeclaredMadeForKids": bool(up("made_for_kids", False)),
     }
+    if public and not publish_at:
+        status["privacyStatus"] = "public"
     if publish_at:
         status["privacyStatus"] = "private"
         status["publishAt"] = publish_at
@@ -137,6 +146,13 @@ def upload_full(path: str | Path, body: dict, cfg, thumb: str | Path | None = No
             out["thumb_ok"] = True
         except Exception as e:
             out["thumb_ok"], out["thumb_error"] = False, str(e)[:200]
+            small = _small_thumb(thumb)        # one more try with a lighter picture (size/format problems)
+            if small and "forbidden" not in str(e).lower() and "403" not in str(e):
+                try:
+                    yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(str(small), mimetype="image/jpeg")).execute()
+                    out["thumb_ok"], out["thumb_error"] = True, ""
+                except Exception as e2:
+                    out["thumb_error"] = str(e2)[:200]
     try:
         info = yt.videos().list(part="status", id=vid).execute()["items"][0]["status"]
         out["privacy"] = info["privacyStatus"]
@@ -144,6 +160,20 @@ def upload_full(path: str | Path, body: dict, cfg, thumb: str | Path | None = No
     except Exception:
         out["privacy"] = f"{out['privacy']} (could not verify)"
     return out
+
+
+def _small_thumb(thumb) -> Path | None:
+    """A 1280x720, quality-80 copy of the thumbnail (YouTube wants <2 MB, 16:9)."""
+    try:
+        from PIL import Image
+        p = Path(thumb)
+        im = Image.open(p).convert("RGB")
+        im.thumbnail((1280, 720))
+        out = p.with_name(p.stem + "_small.jpg")
+        im.save(out, "JPEG", quality=80)
+        return out
+    except Exception:
+        return None
 
 
 def upload_video(path: str | Path, body: dict, cfg) -> tuple[str, str]:
@@ -185,10 +215,18 @@ def fetch_stats(cfg, video_ids: list[str]) -> dict[str, dict]:
     return out
 
 
-def set_visibility(cfg, video_id: str, publish_at: str | None = None) -> None:
-    """publish_at=None -> plain private (no schedule). publish_at=ISO time -> private + scheduled."""
+def set_visibility(cfg, video_id: str, publish_at: str | None = None, public: bool = False) -> None:
+    """publish_at=None -> plain private (no schedule). publish_at=ISO time -> private + scheduled. public=True -> public now."""
     yt = _service(cfg)
-    status = {"privacyStatus": "private", "selfDeclaredMadeForKids": False}
+    status = {"privacyStatus": "public" if public else "private", "selfDeclaredMadeForKids": False}
     if publish_at:
         status["publishAt"] = publish_at
     yt.videos().update(part="status", body={"id": video_id, "status": status}).execute()
+
+
+def post_comment(cfg, video_id: str, text: str) -> str:
+    """Post a top-level comment as the channel owner. Returns the comment id. (The API cannot pin comments.)"""
+    yt = _service(cfg)
+    r = yt.commentThreads().insert(part="snippet", body={"snippet": {"videoId": video_id, "topLevelComment": {
+        "snippet": {"textOriginal": text[:9000]}}}}).execute()
+    return r.get("id", "")

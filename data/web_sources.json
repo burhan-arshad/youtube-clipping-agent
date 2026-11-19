@@ -78,5 +78,65 @@
   "facecam": "",
   "crop": null,
   "extra": {}
+ },
+ "web-8573809e": {
+  "id": "web-8573809e",
+  "streamer": "GTA Series",
+  "url": "https://www.youtube.com/watch?v=cHB8jZB5j5s",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@GTASeriesVideos",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-acdfd1b1": {
+  "id": "web-acdfd1b1",
+  "streamer": "SAYYED YT",
+  "url": "https://www.youtube.com/watch?v=JIuk1pVltRo",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@SAYYEDYT3320",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-1cd07b17": {
+  "id": "web-1cd07b17",
+  "streamer": "",
+  "url": "https://www.youtube.com/watch?v=zqMPPHJhU4I",
+  "path": "",
+  "credit_url": "",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-ed6ef1db": {
+  "id": "web-ed6ef1db",
+  "streamer": "Mad RTX",
+  "url": "https://www.youtube.com/watch?v=Kb48flg2Ptg",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@MADRTX",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-cc3a7cff": {
+  "id": "web-cc3a7cff",
+  "streamer": "Ducky Bhai",
+  "url": "https://www.youtube.com/watch?v=XuYm5c0Xfs4",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@DuckyReloaded1",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-37a3f767": {
+  "id": "web-37a3f767",
+  "streamer": "Xyaa",
+  "url": "https://www.youtube.com/watch?v=TFmtM1kRWp4",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@XyaaLive",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
  }
 }

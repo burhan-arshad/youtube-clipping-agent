@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -53,7 +52,7 @@ def _clean(t: str) -> str:
 def fallback(judgement: dict, hook_title: str, game: str, streamer: str, credit_url: str, cfg) -> dict:
     from .uploader import build_description, build_title
     title = build_title(hook_title or judgement.get("feature_name", "Gameplay detail"),
-                        judgement.get("feature_name", ""), str(cfg.get("upload.title_suffix", "") or ""))
+                        judgement.get("feature_name", ""), norm_suffix(cfg.get("upload.title_suffix", "")))
     return {"title": title, "description": build_description(judgement, streamer, credit_url, cfg),
             "tags": default_tags(game), "thumb_text": ""}
 
@@ -63,14 +62,26 @@ def default_tags(game: str) -> list[str]:
     return [g, f"{g} gameplay", f"{g} details", f"{g} features", "open world", "game details", "gaming shorts"]
 
 
+def norm_suffix(suffix) -> str:
+    """Title suffix with exactly one leading space ('#Shorts' -> ' #Shorts'); '' stays ''."""
+    s = str(suffix or "").strip()
+    return (" " + s) if s else ""
+
+
+_TAIL_TAGS = re.compile(r"(\s*#\w+)+\s*$")
+
+
+PLAYBOOK = ""            # learned from YouTube results (learn.py); set by the pipeline before a clip is built
+
+
 def validate(meta: dict, game: str) -> list[str]:
     p = []
     t = meta.get("title", "")
-    if not (20 <= len(t) <= 95):
+    if not (15 <= len(t) <= 100):
         p.append(f"title length {len(t)} (want 40-70)")
     if game and not mentions_game(t, game):
         p.append(f"title must contain '{game}'")
-    if "#" in re.sub(r"(\s+#\w+)+\s*$", "", t):      # hashtags at the very end are the suffix added on purpose
+    if "#" in _TAIL_TAGS.sub("", t):      # hashtags at the very end are the suffix added on purpose
         p.append("no hashtags in the title")
     d = meta.get("description", "")
     if len(d) < 80:
@@ -82,9 +93,8 @@ def validate(meta: dict, game: str) -> list[str]:
 
 def sanitize(meta: dict, game: str, suffix: str, judgement: dict, cfg, streamer: str = "") -> dict:
     """Repair title/description rule problems without the AI, so a good video is never lost to wording."""
+    suffix = norm_suffix(suffix)
     title = _clean(meta.get("title", ""))
-    if suffix and title.endswith(suffix.strip()):
-        title = title[: -len(suffix.strip())].rstrip()
     title = re.sub(r"\s*#\w+", "", title).strip(" -:|")
     if game and not mentions_game(title, game):
         title = f"{game}: {title}" if title else f"{game}: {judgement.get('feature_name', 'gameplay detail')}"
@@ -112,7 +122,8 @@ def build_description_plain(judgement: dict, streamer: str, cfg) -> str:
     return build_description(judgement, streamer, "", cfg)
 
 
-def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: str = "", credit_url: str = "") -> dict:
+def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: str = "", credit_url: str = "",
+             title_style: str = "") -> dict:
     """Returns {"title","description","tags"}. Falls back to the plain builder if the AI cannot deliver."""
     game = str(cfg.get("game.name", "") or "")
     handle = str(cfg.get("branding.handle", "") or "").strip()
@@ -122,12 +133,13 @@ def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: 
     facts = (f"Feature: {judgement.get('feature_name', '')}\nWhat happens: {judgement.get('what_happens', '')}\n"
              f"Visible evidence: {'; '.join(judgement.get('visible_evidence', []) or [])}\nVoice-over: {script}")
     prompt = f"""You write YouTube Shorts metadata for a {game} channel that explains small game details.
+{PLAYBOOK}
 
 FACTS (only use these, never invent anything):
 {facts}
 
 Write:
-1. "title" - {TITLE_RULES.format(game=game)}
+1. "title" - {TITLE_RULES.format(game=game)}{(" Title style for this video: " + title_style + ".") if title_style else ""}
 2. "description" - plain text, 5 parts separated by blank lines:
    a) one strong sentence (max 140 characters) saying what the viewer will see
    b) 2 short sentences giving context from the facts
@@ -163,8 +175,8 @@ Return JSON only: {{"title": "...", "description": "...", "tags": ["..."], "thum
     if m:
         body = body[: m.start()].rstrip()
     desc = body + "\n\n" + "\n".join(tail) + ("\n\n" + tags_line if tags_line else "")
-    suffix = str(cfg.get("upload.title_suffix", "") or "")
-    title = meta["title"]
+    suffix = norm_suffix(cfg.get("upload.title_suffix", ""))
+    title = _TAIL_TAGS.sub("", meta["title"]).strip()
     if len(title) + len(suffix) <= 100:
         title += suffix
     tags = meta["tags"] or default_tags(game)

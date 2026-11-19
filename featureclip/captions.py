@@ -17,6 +17,23 @@ def _esc(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+HOT_WORDS = {"crash", "crashes", "crashed", "boom", "explodes", "explosion", "wild", "insane", "crazy", "unreal", "wow",
+             "chaos", "fire", "dead", "kill", "shot", "jump", "flip", "flips", "gator", "alligator", "police", "cops",
+             "never", "impossible", "secret", "hidden", "first", "huge", "massive", "legend", "epic", "lol", "wait"}
+
+
+def is_key(word: str) -> bool:
+    """Words worth highlighting in a different colour: numbers, stressed CAPITALS, and a few punchy words."""
+    bare = "".join(ch for ch in word if ch.isalnum())
+    if not bare:
+        return False
+    if any(ch.isdigit() for ch in bare):
+        return True
+    if len(bare) >= 3 and bare.isupper() and bare not in ("GTA", "NPC", "AI", "USA", "FBI"):
+        return True
+    return bare.lower() in HOT_WORDS
+
+
 def fit_hook(text: str, width: int, base_size: int, max_lines: int = 3, max_height: int | None = None) -> tuple[str, int]:
     """Break the hook into lines and pick a font size so that every line fits inside the frame."""
     words = text.split()
@@ -91,7 +108,15 @@ def build_ass(words: list[tuple[float, float, str]], hook: str, cfg, offset: flo
             parts = []
             for j, (_, _, ww) in enumerate(chunk):
                 txt = _esc(ww)
-                parts.append(f"{{\\c&H00E6FF&}}{txt}{{\\c&HFFFFFF&}}" if j == wi else txt)
+                if j == wi:      # the spoken word is yellow and pops a little; key words are orange-red and bigger
+                    col = "&H2D5BFF&" if is_key(ww) else "&H00E6FF&"
+                    big = 125 if is_key(ww) else 112
+                    parts.append(f"{{\\c{col}\\fscx100\\fscy100\\t(0,90,\\fscx{big}\\fscy{big})}}{txt}"
+                                 f"{{\\c&HFFFFFF&\\fscx100\\fscy100}}")
+                elif is_key(ww):
+                    parts.append(f"{{\\c&H2D5BFF&}}{txt}{{\\c&HFFFFFF&}}")
+                else:
+                    parts.append(txt)
             lines.append(f"Dialogue: 0,{_t(offset + s)},{_t(offset + end)},Cap,,0,0,0,,{' '.join(parts)}")
     return "\n".join(lines) + "\n"
 

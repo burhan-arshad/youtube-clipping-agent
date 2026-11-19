@@ -8,5 +8,8 @@ output/
 data/*.db
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
 proofs/
+cookies.txt

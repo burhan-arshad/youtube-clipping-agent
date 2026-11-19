@@ -249,10 +249,15 @@ class JobManager:
         job.say(f"video: {a['video']}")
         if str(a["video"]).lower().startswith("http"):
             from ..live import is_live
-            if is_live(a["video"]):           # a running live stream cannot be downloaded like a normal video
+            if is_live(a["video"], cfg):           # a running live stream cannot be downloaded like a normal video
                 job.say("This link is a LIVE stream -> recording it live instead of downloading it from the start.")
                 return self._do_watch(job)
-        vid = p.run(src.id)
+        from ..ingest import LiveStreamError
+        try:
+            vid = p.run(src.id)
+        except LiveStreamError:               # the live check could not tell, but the download shows it is live
+            job.say("This link is a LIVE stream -> recording it live instead of downloading it from the start.")
+            return self._do_watch(job)
         counts: dict[str, int] = {}
         for c in store.clips(vid):
             counts[c["status"]] = counts.get(c["status"], 0) + 1
@@ -283,7 +288,7 @@ class JobManager:
                 from ..live import stream_urls
                 import subprocess
                 job.say("Grabbing 8 seconds from the live stream ...")
-                inputs = stream_urls(video, 720)
+                inputs = stream_urls(video, 720, load_config(self.config_path, root=self.root))
                 cmd = ["ffmpeg", "-y", "-v", "error", "-nostdin"]
                 for i in inputs:
                     cmd += ["-i", i]

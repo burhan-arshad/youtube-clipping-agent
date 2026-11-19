@@ -10,7 +10,25 @@ from .ffutil import probe
 from .sources import Source
 
 
-def ingest(src: Source, workdir: Path, cfg=None) -> Path:
+def _kill_tree(proc) -> None:
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=15)
+    except Exception:
+        proc.kill()
+
+
+class LiveStreamError(RuntimeError):
+    """The link turned out to be a running live stream: it must be recorded live, not downloaded."""
+
+
+def ingest(src: Source, workdir: Path, cfg=None, stop=None) -> Path:
     """Return the path of the video file for this source (download it if it is a link)."""
     if src.path:
         p = Path(src.path).expanduser()
@@ -45,7 +63,17 @@ def ingest(src: Source, workdir: Path, cfg=None) -> Path:
                             encoding="utf-8", errors="replace", bufsize=1)
     last_step = -1
     for line in proc.stdout:                       # show progress without flooding the log
+        if stop is not None and stop.is_set():
+            _kill_tree(proc)
+            for part in dest_dir.glob("video.*"):
+                part.unlink(missing_ok=True)       # never keep a half download
+            raise RuntimeError("stopped by you")
         line = line.rstrip()
+        if "yt_live_broadcast" in line or "[download] Downloading live" in line:
+            _kill_tree(proc)                       # a running live stream never "finishes": stop at once
+            for part in dest_dir.glob("video.*"):
+                part.unlink(missing_ok=True)
+            raise LiveStreamError("this link is a running LIVE stream")
         if line.startswith("[download]") and "%" in line:
             try:
                 step = int(float(line.split("%")[0].split()[-1]) // 10)

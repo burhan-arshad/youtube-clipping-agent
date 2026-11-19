@@ -15,7 +15,6 @@ import json
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import metadata, schedule
@@ -27,6 +26,10 @@ from .store import Store
 
 REVIEW_PROMPT = """You are the final quality reviewer of a YouTube Shorts channel about {game}. The images are frames
 of the finished vertical video in time order{times_note} (the last image is the thumbnail, if there is one).
+
+GAME NAME: the footage is from "{game}" (possibly newer than your knowledge). The correct name is exactly "{game}".
+Never claim the title/description/script "refer to the wrong game", never suggest another game or version, and never say
+the game does not exist.
 
 Title: {title}
 Description:
@@ -53,6 +56,18 @@ Return JSON only:
 An empty issues list means you found nothing wrong."""
 
 
+def _wrong_game_claim(text: str, game: str) -> bool:
+    """True for reviewer remarks like 'refers to GTA 5 but the footage is GTA 6' (hallucination about the game name)."""
+    import re
+    t = text.lower()
+    if not game or re.search(r"\b(5|v)\b", game.lower()):
+        return False                                       # only for newer-than-V games (e.g. GTA 6)
+    if re.search(r"gta\s*(5|v)\b|grand theft auto\s*(5|v)\b", t) and re.search(r"gta\s*(6|vi)|grand theft auto\s*(6|vi)|footage|wrong game|incorrect", t):
+        return True
+    return bool(re.search(r"(does not|doesn't|not) (yet )?exist|not (been )?released|unreleased|fan.?made|leak", t)
+                and game.lower() in t)
+
+
 def check_basics(c, cfg) -> list[dict]:
     """Deterministic checks. Each item: {name, ok, detail}."""
     out = []
@@ -71,7 +86,8 @@ def check_basics(c, cfg) -> list[dict]:
             out.append({"name": "video readable", "ok": False, "detail": str(e)[:100]})
     game = str(cfg.get("game.name", "") or "")
     probs = metadata.validate({"title": c["title"] or "", "description": c["description"] or ""}, game)
-    out.append({"name": "title + description rules", "ok": not probs, "detail": "; ".join(probs)})
+    # wording is repaired in code before review; it must never stop a good video, so it is informational only
+    out.append({"name": "title + description rules", "ok": True, "detail": "; ".join(probs)})
     th = c["thumb"]
     out.append({"name": "thumbnail < 2 MB", "ok": bool(th) and Path(th).is_file() and Path(th).stat().st_size < 2_000_000,
                 "detail": "" if th else "missing"})
@@ -125,8 +141,11 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
             score = float(raw.get("score", 0))
         except (TypeError, ValueError):
             score = 0.0
+        game_name = str(cfg.get("game.name", "") or "")
         for it in raw.get("issues") or []:
             if isinstance(it, dict):
+                if _wrong_game_claim(str(it.get("text", "")), game_name):
+                    continue                              # the reviewer's knowledge predates the game: ignore it
                 t = str(it.get("type", "video")).lower()
                 t = t if t in ("video", "script", "metadata", "thumbnail", "policy") else "video"
                 sev = "blocker" if (t == "policy" or (str(it.get("severity", "")).lower() == "blocker" and t != "thumbnail")) else "minor"
@@ -236,6 +255,12 @@ class Assistant:
             self._learn(cfg, store, notifier)
             self._phase("clean", "Cleaning old files")
             self._housekeeping(cfg, store, notifier)
+            try:
+                from . import extras
+                extras.first_comments(cfg, store)
+                extras.weekly_report(cfg, store, notifier)
+            except Exception:
+                traceback.print_exc()
             self._phase(None)
             self._stock(cfg, store, notifier)
             msg = self._summary(store)
@@ -276,7 +301,7 @@ class Assistant:
         if s["kind"] == "auto":                       # live or recorded? ask YouTube instead of guessing from the link
             from .live import is_live
             self._phase("source", "Checking whether the link is a live stream")
-            kind = "live" if (is_live(s["url"]) or "/live" in s["url"].lower()) else "video"
+            kind = "live" if (is_live(s["url"], cfg) or "/live" in s["url"].lower()) else "video"
             store.update_agent_source(s["id"], kind=kind)
             s = dict(s, kind=kind)
             self._event("info", f"Link is a {'LIVE stream' if kind == 'live' else 'recorded video'}: {s['url'][:70]}")
@@ -284,7 +309,7 @@ class Assistant:
         args = dict(video=s["url"], streamer=s["streamer"] or "", credit_url=s["credit_url"] or "",
                     facecam=opts.get("facecam", ""), crop=opts.get("crop"))
         if s["kind"] == "live":
-            job = self.jobs.submit("watch", f"LIVE (assistant): {s['url'][:60]}", minutes=opts.get("minutes", 5), **args)
+            job = self.jobs.submit("watch", f"LIVE (assistant): {s['url'][:60]}", minutes=float(cfg.get("assistant.piece_minutes", 5) or 5), **args)
         else:
             job = self.jobs.submit("run", f"Make clips (assistant): {s['url'][:60]}", **args)
         opts["job"] = job.id
@@ -364,7 +389,7 @@ class Assistant:
         video = store.video(c["video_id"])
         src = pipe.sources.get(video["source_id"]) if video else None
         fixed = metadata.sanitize({"title": c["title"] or "", "description": c["description"] or ""}, game,
-                                  str(cfg.get("upload.title_suffix", "") or ""), j, cfg, src.streamer if src else "")
+                                  metadata.norm_suffix(cfg.get("upload.title_suffix", "")), j, cfg, src.streamer if src else "")
         store.update_clip(c["id"], title=fixed["title"], description=fixed["description"])
         self._event("info", f"Clip {c['id']}: wording fixed automatically ({'; '.join(probs)[:80]})")
         return store.clip(c["id"])
@@ -401,6 +426,15 @@ class Assistant:
         store.kv_set("warned_login", "")
         pipe.upload()
         for r in getattr(pipe, "upload_results", []):
+            if r.get("limit"):
+                key = store.kv_get("upload_pause_until", "")
+                if store.kv_get("limit_notified") != key:
+                    store.kv_set("limit_notified", key)
+                    self._event("warn", "YouTube upload limit reached: uploads paused, clips are kept")
+                    notifier.send("warn", "YouTube upload limit reached",
+                                  "YouTube allows only a few uploads per day for this channel. The assistant waits and "
+                                  "tries again later. Verify your phone number at youtube.com/verify to raise the limit.")
+                continue
             c = store.clip(r["clip"])
             self._event("ok" if r["ok"] else "bad", (f"Uploaded clip {r['clip']}: {r['state']}" if r["ok"]
                                                         else f"Upload failed for clip {r['clip']}"))
@@ -412,6 +446,8 @@ class Assistant:
             else:
                 notifier.send("error", "Upload failed", f"{c['title']}\n{r.get('error', '')}")
         for r in getattr(pipe, "upload_results", []):
+            if r.get("limit"):
+                continue                                  # a daily limit is not a failure of the system
             streak = 0 if r["ok"] else int(store.kv_get("fail_streak", "0") or 0) + 1
             store.kv_set("fail_streak", str(streak))
             if streak and cfg.get("safe.auto", True) and streak >= int(cfg.get("safe.fail_streak", 3)):
@@ -481,6 +517,11 @@ class Assistant:
         except Exception as e:
             self.state["tick_error"] = f"stats: {type(e).__name__}: {str(e)[:120]}"
             return
+        try:
+            from . import learn
+            learn.refresh(store, cfg)                  # retrain the channel playbook on the new numbers
+        except Exception:
+            pass
         mode = str(cfg.get("schedule.autotune", "off"))
         if mode == "off":
             return

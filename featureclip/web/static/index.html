@@ -108,6 +108,28 @@
   .theme{all:unset;cursor:pointer;color:var(--muted);font-size:12.5px;padding:6px 10px}
   @media(max-width:820px){.shell{grid-template-columns:1fr} aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap}
     .side-foot{display:none} main{padding:20px 16px}}
+  /* phone view */
+  @media(max-width:820px){
+    aside{padding:10px 10px 4px;gap:2px;position:sticky;top:0;z-index:20}
+    .brand{padding:0 8px 6px;font-size:17px}
+    nav{display:flex;gap:4px;overflow-x:auto;width:100%;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+    nav::-webkit-scrollbar{display:none}
+    nav button{width:auto;white-space:nowrap;padding:9px 12px;flex:0 0 auto}
+    h1{font-size:22px} .card{padding:14px} .clips{grid-template-columns:1fr}
+    .clip video{max-height:60vh} button.btn{min-height:42px} button.btn.sm{min-height:38px}
+    input[type=text],input[type=password],input[type=number],select,textarea{font-size:16px}
+    .kv{grid-template-columns:1fr} .row{flex-wrap:wrap}
+    table{display:block;overflow-x:auto;white-space:nowrap}
+    .toast{left:12px;right:12px;bottom:12px;max-width:none}
+    .feed{max-height:240px}
+  }
+  #banner .bar{padding:9px 16px;background:rgba(255,107,107,.14);border-bottom:1px solid var(--bad);font-size:13.5px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  #banner .bar.warn{background:rgba(255,209,102,.14);border-color:var(--warn)}
+  .qbar{height:7px;border-radius:99px;background:var(--panel2);overflow:hidden;min-width:60px}.qbar>i{display:block;height:100%;background:var(--ok)}
+  .qbar.low>i{background:var(--warn)}.qbar.out>i{background:var(--bad)}
+  .qrow{display:grid;grid-template-columns:minmax(120px,1.4fr) 2fr auto;gap:10px;align-items:center;font-size:12.5px;padding:3px 0}
+  .tl{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .tl .x{flex:0 0 auto}
 
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,178,31,.55)}70%{box-shadow:0 0 0 10px rgba(255,178,31,0)}100%{box-shadow:0 0 0 0 rgba(255,178,31,0)}}
 @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
@@ -128,6 +150,7 @@
 </style>
 </head>
 <body>
+<div id="banner"></div>
 <div class="shell">
   <aside>
     <div class="brand"><span>feature</span>clip</div>
@@ -365,7 +388,7 @@ async function viewClips() {
             ${c.youtube_id ? `· <a style="color:var(--accent)" target="_blank" href="https://youtube.com/shorts/${esc(c.youtube_id)}">open</a>` : ""}</div>` : ""}
           ${live ? `<label style="margin:4px 0 2px">Title</label><input class="title" type="text" value="${esc(c.title)}" data-f="title">` : ""}
           <div class="meta"><b>${esc(c.feature)}</b></div>
-          ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ""}
+          ${c.reason ? `<div class="why">${esc(c.reason)}${c.hint ? `<div style="margin-top:4px;color:var(--text)">💡 ${esc(c.hint)}</div>` : ""}</div>` : ""}
           ${reviewHtml(c.review)}
           ${live ? `<details><summary>Description, tags &amp; thumbnail</summary>
             ${c.has_thumb ? `<img class="preview" style="margin:8px 0" src="/media/clip/${c.id}/thumb?t=${c.updated}">` : ""}
@@ -373,7 +396,10 @@ async function viewClips() {
             <label>Tags (comma separated)</label><input type="text" data-f="tags" value="${esc((c.tags || []).join(", "))}">
             <div class="actions"><button class="btn sm" data-a="regen">✨ New title / description / thumbnail</button></div></details>` : ""}
           ${c.evidence && c.evidence.length ? `<div class="meta">AI saw: ${esc(c.evidence.join(" • "))}</div>` : ""}
-          ${c.script ? `<details><summary>Voice-over script</summary><p>${esc(c.script)}</p></details>` : ""}
+          ${c.script ? `<details><summary>Voice-over script (edit &amp; new voice)</summary>
+            <textarea rows="6" data-script style="margin-top:8px">${esc(c.script)}</textarea>
+            <div class="help">Script badal kar "New voice" dabayein: sirf awaaz, captions aur video dobara banenge (title/description wahi rahenge). Tags jaise &lt;laugh&gt; chal sakte hain.</div>
+            <div class="actions" style="margin-top:8px"><button class="btn sm" data-a="revoice">🎙 New voice from this script</button></div></details>` : ""}
           <div class="actions" style="margin-top:6px">
             ${c.status==='ready' ? `<button class="btn good sm" data-a="approve">Approve</button><button class="btn danger sm" data-a="reject">Reject</button>` : ""}
             ${c.status==='approved' ? `<button class="btn sm" data-a="reject">Remove approval</button>` : ""}
@@ -391,6 +417,12 @@ async function viewClips() {
           if (a === "reject") await api("/api/clips/reject", {method: "POST", body: {ids: [id]}});
           if (a === "rebuild") { const r = await api(`/api/clips/${id}/rebuild`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
           if (a === "publish") { const r = await api(`/api/clips/${id}/publish`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
+          if (a === "revoice") {
+            const txt = card.querySelector("[data-script]").value;
+            b.disabled = true; b.textContent = "Starting ...";
+            const r = await api(`/api/clips/${id}/revoice`, {method: "POST", body: {script: txt}});
+            toast("Nayi voice ban rahi hai (Activity tab)", "ok"); activeJob = r.id; tab = "activity"; render(); return;
+          }
           if (a === "regen") { b.disabled = true; b.textContent = "Writing ..."; const r = await api(`/api/clips/${id}/regen-meta`, {method: "POST"}); toast("New title: " + r.title, "ok"); }
           if (a === "review") { await api(`/api/clips/${id}/review`, {method: "POST"}); toast("The assistant will review it again within a minute", "ok"); }
           refreshState(); draw();
@@ -609,44 +641,94 @@ async function viewUsage() {
 }
 
 // ------------------------------------------------------------------ ASSISTANT
+const fmtLeft = sec => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
+function drawQuota(Q) {
+  const box = $("#asQuota"); if (!box || !Q) return;
+  const rows = Q.models.filter(m => m.limit || m.cooling || m.used);
+  const html = `<div class="card" style="padding:14px 18px">
+    <div class="row" style="align-items:center"><div><b>🧮 AI free quota</b>
+      <span class="help" style="margin-left:8px">${Q.usable}/${Q.total} models usable · about <b>${Q.total_left}</b> requests left today · resets <b>${esc(Q.reset_text)}</b> (in ${fmtLeft(Q.reset_in)})</span></div></div>
+    <details style="margin-top:8px"><summary>Per model</summary>
+    ${rows.map(m => { const pct = m.limit ? Math.min(100, Math.round(100 * m.used / m.limit)) : 0; const cls = m.cooling || pct >= 100 ? "out" : pct >= 75 ? "low" : "";
+      return `<div class="qrow"><span>${esc(m.model)}</span><div class="qbar ${cls}"><i style="width:${pct}%"></i></div>
+        <span class="help" style="margin:0">${m.used}${m.limit ? " / " + m.limit : ""}${m.cooling ? " · ⏸ " + esc(m.cooling.reason) : ""}</span></div>`; }).join("")}
+    ${Q.tts.length ? `<div class="help" style="margin:8px 0 2px"><b>Voice (TTS)</b></div>` + Q.tts.map(m => { const pct = m.limit ? Math.min(100, Math.round(100 * m.used / m.limit)) : 0; const cls = m.cooling || pct >= 100 ? "out" : pct >= 75 ? "low" : "";
+      return `<div class="qrow"><span>${esc(m.model)}</span><div class="qbar ${cls}"><i style="width:${pct}%"></i></div>
+        <span class="help" style="margin:0">${m.used}${m.limit ? " / " + m.limit : ""}${m.cooling ? " · ⏸ " + esc(m.cooling.reason) : ""}</span></div>`; }).join("") : ""}
+    </details></div>`;
+  if (box._sig !== html) { const open = box.querySelector("details")?.open; box._sig = html; box.innerHTML = html; if (open) box.querySelector("details").open = true; }
+}
+async function runSelfTest(online) {
+  const box = $("#asTest"); if (!box) return;
+  box.innerHTML = `<div class="card"><div class="help">Checking ...</div></div>`;
+  let r; try { r = await api("/api/selftest?online=" + (online ? "true" : "false")); } catch (e) { box.innerHTML = `<div class="card why">${esc(e.message)}</div>`; return; }
+  const ic = {ok: "✅", warn: "⚠️", bad: "❌"};
+  box.innerHTML = `<div class="card"><div class="row" style="align-items:center"><h2 style="margin:0">${r.ok ? (r.warn ? "⚠️ Mostly fine" : "✅ Everything is ready") : "❌ Something needs fixing"}</h2>
+    <button class="btn sm fit" id="stClose">Close</button></div>
+    <div style="margin-top:8px">${r.checks.map(c => `<div class="tl"><span class="x">${ic[c.level]}</span><div><b>${esc(c.name)}</b> <span class="help">${esc(c.detail)}</span>${c.fix ? `<div class="help" style="color:var(--warn)">→ ${esc(c.fix)}</div>` : ""}</div></div>`).join("")}</div></div>`;
+  $("#stClose").onclick = () => { box.innerHTML = ""; };
+}
 async function viewAssistant() {
   $("#main").innerHTML = `<h1>Assistant</h1>
     <p class="sub">Give it live or video links. It records, makes the clips, checks every video, title, description and thumbnail, fixes problems, and schedules 3 videos a day. You get a notification when it needs a new link.</p>
-    <div id="asLive"></div><div id="asBody">Loading ...</div>`;
+    <div class="actions" style="margin:-6px 0 14px"><button class="btn sm" id="stQuick">🩺 Self-test</button><button class="btn sm" id="stFull" title="Also asks Google whether the Gemini key works (uses no quota)">🌐 Full self-test</button></div>
+    <div id="asLive"></div><div id="asQuota"></div><div id="asTest"></div><div id="asBody">Loading ...</div>`;
+  $("#stQuick").onclick = () => runSelfTest(false); $("#stFull").onclick = () => runSelfTest(true);
   const fmtDur = sec => { sec = Math.max(0, Math.round(sec)); const m = Math.floor(sec / 60), h = Math.floor(m / 60); return h ? `${h}h ${m % 60}m` : m ? `${m}m ${sec % 60}s` : `${sec}s`; };
   const drawLive = async () => {
-    if (tab !== "assistant") return;
+    if (tab !== "assistant" || document.hidden) return;
     let L; try { L = await api("/api/assistant/live"); } catch (e) { return; }
     const idle = L.mode === "idle";
     const elapsed = L.job ? fmtDur(L.now - L.job.since) : (L.assistant ? fmtDur(L.now - L.assistant.since) : "");
     const bar = L.progress != null ? `<div class="pbar"><i style="width:${Math.min(100, L.progress)}%"></i></div>`
       : (!idle ? `<div class="pbar ind"><i></i></div>` : "");
     const ev = {ok: "✅", bad: "❌", warn: "⚠️", info: "ℹ️"};
-    $("#asLive").innerHTML = `<div class="card" style="border-color:${L.warning ? "var(--bad)" : idle ? "var(--line)" : "var(--accent)"}">
+    drawQuota(L.quota);
+    const html = `<div class="card" style="border-color:${L.warning ? "var(--bad)" : idle ? "var(--line)" : "var(--accent)"}">
       <div class="row" style="align-items:center;gap:12px"><span class="live-dot ${idle ? "idle" : L.warning ? "bad" : ""}"></span>
         <div style="flex:1"><div style="font-size:11px;letter-spacing:.08em;color:var(--muted)">${idle ? "ASSISTANT IS" : "RIGHT NOW"}</div>
           <div style="font-size:19px;font-weight:700">${esc(L.headline || "Idle")}</div>
-          ${L.detail ? `<div class="help" style="margin:2px 0 0">${esc(L.detail)}${L.next_check_in != null && idle && L.enabled ? ` · next check in ${L.next_check_in}s` : ""}</div>` : ""}
-          ${L.job ? `<div class="help" style="margin:2px 0 0">${esc(L.job.title)} · running for ${elapsed}${L.pieces ? ` · ${L.pieces} live piece(s) processed` : ""}</div>` : ""}</div>
+          ${L.detail ? `<div class="help" style="margin:2px 0 0">${esc(L.detail)}${L.next_check_in != null && idle && L.enabled ? ` · next check in <span data-el="nc">${L.next_check_in}</span>s` : ""}</div>` : ""}
+          ${L.job ? `<div class="help" style="margin:2px 0 0">${esc(L.job.title)} · running for <span data-el="job">${elapsed}</span>${L.pieces ? ` · ${L.pieces} live piece(s) processed` : ""}</div>` : ""}</div>
         ${L.source ? `<div><button class="btn sm fit" data-lstop="${L.source.id}">⏹ Stop</button> <button class="btn sm fit" data-lrestart="${L.source.id}">🔄 Re-check type &amp; restart</button></div>` : ""}</div>
       <div style="margin-top:12px">${bar}</div>
       ${L.warning ? `<div style="margin-top:10px;padding:9px 12px;border-radius:10px;background:rgba(255,107,107,.1);border:1px solid var(--bad);font-size:13px"><b>⚠️ Problem:</b> ${esc(L.warning)}</div>` : ""}
       <div class="steps">${L.steps.map((s, i) => `${i ? '<span style="color:var(--muted)">›</span>' : ""}<span class="step ${s.state}">${s.state === "done" ? "✓" : s.state === "active" ? "●" : ""} ${esc(s.label)}</span>`).join("")}</div>
-      ${L.assistant && L.mode === "job" ? `<div class="help" style="margin:0 0 8px">🤖 At the same time the assistant is: <b>${esc(L.assistant.text)}</b> (${fmtDur(L.now - L.assistant.since)})</div>` : ""}
+      ${L.assistant && L.mode === "job" ? `<div class="help" style="margin:0 0 8px">🤖 At the same time the assistant is: <b>${esc(L.assistant.text)}</b> (<span data-el="as">${fmtDur(L.now - L.assistant.since)}</span>)</div>` : ""}
       <div class="cnt">${L.counters.needs_you ? `<span style="color:var(--warn)"><b>${L.counters.needs_you}</b> need your decision</span>` : ""}<span><b>${L.counters.in_review}</b> in review</span><span><b>${L.counters.approved}</b> approved</span><span><b>${L.counters.scheduled}</b> scheduled</span>
         <span><b>${L.counters.uploaded}</b> uploaded</span><span><b>${L.counters.rejected}</b> rejected</span>${L.counters.next_publish ? `<span>next public: <b>${esc(L.counters.next_publish)}</b></span>` : ""}</div>
       <div class="grid2" style="margin-top:14px;gap:16px">
         <div><div class="help" style="margin:0 0 4px"><b>Video work (live log)</b></div><div class="feed">${L.feed.length ? L.feed.map(f => `<div><span class="t">${esc(f.t)}</span><span>${esc(f.text)}</span></div>`).join("") : '<div class="help">No video work running.</div>'}</div></div>
         <div><div class="help" style="margin:0 0 4px"><b>Assistant decisions</b></div><div class="feed">${L.events.length ? L.events.map(f => `<div><span class="t">${new Date(f.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}</span><span>${ev[f.level] || ""} ${esc(f.text)}</span></div>`).join("") : '<div class="help">Nothing decided yet.</div>'}</div></div>
       </div></div>`;
+    const box = $("#asLive");
+    const sig = html.replace(/<span data-el="\w+">[^<]*<\/span>/g, "");
+    if (box._sig === sig) {                       // nothing changed: only tick the clocks, so animations are not restarted
+      const j = box.querySelector('[data-el="job"]'); if (j) j.textContent = elapsed;
+      const n = box.querySelector('[data-el="nc"]'); if (n && L.next_check_in != null) n.textContent = L.next_check_in;
+      const a = box.querySelector('[data-el="as"]'); if (a && L.assistant) a.textContent = fmtDur(L.now - L.assistant.since);
+      return;
+    }
+    box._sig = sig; box.innerHTML = html;
     document.querySelectorAll("[data-lstop]").forEach(b => b.onclick = async () => { if (!confirm("Stop this job?")) return; await api(`/api/assistant/sources/${b.dataset.lstop}/stop`, {method: "POST", body: {}}); toast("Stopping ...", "ok"); drawLive(); });
     document.querySelectorAll("[data-lrestart]").forEach(b => b.onclick = async () => { await api(`/api/assistant/sources/${b.dataset.lrestart}/stop`, {method: "POST", body: {restart: true}}); toast("Stopped. The assistant will check the link type again and restart it.", "ok"); drawLive(); });
   };
   drawLive();
   const tl = setInterval(() => { if (tab !== "assistant") return clearInterval(tl); drawLive(); }, 2000);
+  const learnHtml = (l) => {
+    if (!l) return "";
+    const f = (x) => `<tr><td>${esc(x.feature)}</td><td>${esc(x.value)}</td><td>${x.n}</td><td>${x.avg}</td><td style="color:var(--${x.lift >= 0 ? "ok" : "bad"})"><b>${x.lift > 0 ? "+" : ""}${x.lift}</b></td></tr>`;
+    let h = `<h3 style="margin:16px 0 6px">🧠 Channel playbook (trained on your YouTube results)</h3>`;
+    if (l.clips < l.need) return h + `<div class="help">Learning starts after ${l.need} published Shorts have stats (now ${l.clips}). Until then nothing changes in how clips are made.${l.analytics_on ? "" : " Tip: switch on 'Read watch time / retention from YouTube' in Settings for better learning."}</div>`;
+    h += `<div class="help">${l.clips} Shorts analysed · channel average score ${l.overall} · ${l.in_use ? "<b>the writers use this playbook</b>" : "playbook not used yet (not enough clear differences)"}${l.analytics ? "" : " · retention not available (upload.analytics is off)"}</div>`;
+    if (l.playbook) h += `<pre style="white-space:pre-wrap;font-size:12px;background:rgba(255,255,255,.04);padding:8px;border-radius:8px">${esc(l.playbook)}</pre>`;
+    if (l.features.length) h += `<div style="overflow-x:auto"><table class="tbl"><tr><th>Feature</th><th>Value</th><th>Clips</th><th>Avg score</th><th>Lift</th></tr>${l.features.slice(0, 12).map(f).join("")}</table></div>`;
+    h += `<div class="help">Best: ${l.best.map(b => esc(b.title) + " (" + b.views + " views)").join(" · ")}</div>`;
+    return h + `<div class="actions" style="margin-top:8px"><button class="btn sm fit" id="learnRefresh">🔄 Retrain now</button></div>`;
+  };
   const draw = async () => {
     if (tab !== "assistant") return;
-    const [a, sc, fields, ins] = await Promise.all([api("/api/assistant"), api("/api/schedule"), api("/api/settings"), api("/api/insights")]);
+    const [a, sc, fields, ins, lrn] = await Promise.all([api("/api/assistant"), api("/api/schedule"), api("/api/settings"), api("/api/insights"), api("/api/learn").catch(() => null)]);
     const keep = {}; document.querySelectorAll("#asBody [data-key]").forEach(e => keep[e.dataset.key] = e.type === "checkbox" ? e.checked : e.value);
     const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#asBody") && ["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName);
     if (editing && $("#asForm")) { $("#asState").innerHTML = stateHtml(a); $("#asQueue").innerHTML = queueHtml(a); wireQueue(); return; }
@@ -654,7 +736,7 @@ async function viewAssistant() {
     const mine = fields.filter(f => ["Assistant", "Schedule", "Safety & disk", "Notifications"].includes(f.group));
     $("#asBody").innerHTML = `
       <div class="card" id="asState">${stateHtml(a)}</div>
-      <details class="card" id="asIns" ${insOpen ? "open" : ""}><summary style="cursor:pointer"><h2 style="display:inline">📈 What the assistant learns</h2></summary>${insightsHtml(ins)}</details>
+      <details class="card" id="asIns" ${insOpen ? "open" : ""}><summary style="cursor:pointer"><h2 style="display:inline">📈 What the assistant learns</h2></summary>${insightsHtml(ins)}${learnHtml(lrn)}</details>
       <div class="grid2">
         <div class="card"><h2>Links for the assistant</h2>
           <label>Live stream or video link</label>
@@ -707,6 +789,10 @@ async function viewAssistant() {
         ${a.safe.held.length ? `<button class="btn sm fit" id="safeRelease">Re-schedule ${a.safe.held.length} held video(s) and resume</button>` : ""}</div>`
       : `<div style="margin-top:10px"><button class="btn sm fit danger" id="safeOn">🛑 Safe mode</button>
         <span class="help" style="margin-left:8px">One click stops all uploads and new work.</span></div>`}
+    <div class="help" style="margin-top:8px">🚀 <b>Launch mode</b>: ${a.launch && a.launch.active
+        ? `ON · ${a.launch.left} launch upload(s) left (1st now, then every ${a.launch.gap} min) <button class="btn sm fit" id="launchOff" style="margin-left:6px">Stop</button>`
+        : `first clip public now, 2nd +1 h, 3rd +2 h, then the normal slots.`}
+      <button class="btn sm fit" id="launchOn" style="margin-left:6px" title="Moves already scheduled videos into the launch times too">Start launch mode</button></div>
     <div class="help" style="margin-top:8px">💾 Free disk: <b>${a.disk.free_gb} GB</b>${a.disk.last ? ` · last cleanup freed ${a.disk.last.freed_mb} MB` : ""} <button class="btn sm fit" id="cleanNow" style="margin-left:6px">Clean now</button>
       <button class="btn sm fit" id="recheck" style="margin-left:6px" title="Review the rejected clips again with the newer, fairer rules">♻ Re-check rejected clips</button></div>
     <div class="help" style="margin-top:8px">${esc(a.state.message || "")} ${a.state.tick_error ? `<span style="color:var(--bad)">· ${esc(a.state.tick_error)}</span>` : ""}</div>
@@ -726,12 +812,15 @@ async function viewAssistant() {
       toast(on ? "Assistant switched on" : "Assistant switched off", "ok"); draw(); };
     if ($("#asNow")) $("#asNow").onclick = async () => { await api("/api/assistant/run-now", {method: "POST"}); toast("Checking now ...", "ok"); };
     const post = async (url, body, msg) => { try { const r = await api(url, {method: "POST", body: body || {}}); toast(msg ? msg(r) : "Done", "ok"); } catch (e) { toast(e.message, "bad"); } draw(); };
+    if ($("#launchOn")) $("#launchOn").onclick = () => { if (confirm("Launch mode: the first clip goes public NOW, the 2nd after 1 hour, the 3rd after 2 hours. Videos already scheduled on YouTube are moved into these times too. Continue?")) post("/api/launch", {count: 3}, r => `Launch mode ON (${r.moved} scheduled video(s) moved${r.failed && r.failed.length ? ", " + r.failed.length + " failed: " + r.failed[0].error : ""})`); };
+    if ($("#launchOff")) $("#launchOff").onclick = () => post("/api/launch", {off: true}, () => "Launch mode off");
     if ($("#safeOn")) $("#safeOn").onclick = () => { if (confirm("Stop all uploads and new work?")) post("/api/safe", {on: true}, () => "Safe mode ON"); };
     if ($("#safeOff")) $("#safeOff").onclick = () => post("/api/safe", {on: false}, () => "Safe mode off, the assistant continues");
     if ($("#safePull")) $("#safePull").onclick = () => { if (confirm("Set every scheduled (not yet public) video back to private?")) post("/api/safe/pull-back", {}, r => `${r.pulled} video(s) pulled back` + (r.failed.length ? `, ${r.failed.length} failed` : "")); };
     if ($("#safeRelease")) $("#safeRelease").onclick = () => post("/api/safe/release", {}, r => `${r.rescheduled} video(s) scheduled again, safe mode off`);
     if ($("#recheck")) $("#recheck").onclick = () => post("/api/assistant/recheck-rejected", {}, r => `${r.requeued} clip(s) sent back for a fair re-check`);
     if ($("#cleanNow")) $("#cleanNow").onclick = () => post("/api/cleanup", {}, r => `Freed ${r.freed_mb} MB (${r.files} items), ${r.free_gb} GB free`);
+    if ($("#learnRefresh")) $("#learnRefresh").onclick = () => post("/api/learn/refresh", {}, r => `Retrained on ${r.clips} Shorts`);
     if ($("#insRefresh")) $("#insRefresh").onclick = () => post("/api/insights/refresh", {}, r => `Stats updated for ${r.updated} video(s)`);
     if ($("#insApply")) $("#insApply").onclick = () => post("/api/insights/apply-slots", {}, r => "Publish times now: " + r.slots.join(", "));
   };
@@ -803,6 +892,17 @@ document.getElementById("themeBtn").onclick = () => {
 };
 try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 $("#bell").onclick = toggleNotes;
+async function checkStartup() {
+  try {
+    const r = await api("/api/startup-check"); const b = $("#banner");
+    const bad = r.bad || [], warn = r.warn || [];
+    if (!bad.length) { b.innerHTML = ""; return; }
+    b.innerHTML = `<div class="bar"><b>⚠️ Start check:</b> ${bad.map(c => esc(c.name) + (c.detail ? " (" + esc(c.detail.slice(0, 80)) + ")" : "")).join(" · ")}
+      <button class="btn sm" id="bnTest">Open self-test</button></div>`;
+    $("#bnTest").onclick = () => { tab = "assistant"; localStorage.setItem("tab", tab); render(); setTimeout(() => runSelfTest(false), 200); };
+  } catch (e) {}
+}
+checkStartup(); setInterval(checkStartup, 60000);
 refreshState().then(render); refreshNotes(); setInterval(refreshNotes, 8000);
 setInterval(refreshState, 5000);
 </script>

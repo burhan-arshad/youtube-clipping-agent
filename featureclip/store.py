@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .quota import quota_day
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,19 +157,35 @@ class Store:
         self.db.execute(f"UPDATE clips SET {cols} WHERE id=?", (*fields.values(), clip_id))
         self.db.commit()
 
+    def refresh_video(self, video_id: int, info: dict) -> bool:
+        """The same file name can come back with different content (live pieces are named seg_r00_00000 on every
+        recording). If the file changed, update the row and remove the clips that still refer to the old content.
+        Returns True when the file was different."""
+        row = self.db.execute("SELECT duration FROM videos WHERE id=?", (video_id,)).fetchone()
+        old = row["duration"] if row else None
+        new = info.get("duration")
+        if old is None or new is None or abs(float(old) - float(new)) < 1.0:
+            return False
+        self.db.execute("UPDATE videos SET duration=?, width=?, height=? WHERE id=?",
+                        (new, info.get("width"), info.get("height"), video_id))
+        self.db.execute("DELETE FROM clips WHERE video_id=? AND status IN ('candidate','judged','dropped','error','building')",
+                        (video_id,))
+        self.db.commit()
+        return True
+
     def delete_candidates(self, video_id: int) -> None:
         self.db.execute("DELETE FROM clips WHERE video_id=? AND status='candidate'", (video_id,))
         self.db.commit()
 
     # ---- llm usage (free-tier budgets)
     def usage_today(self, model: str) -> int:
-        day = time.strftime("%Y-%m-%d")
+        day = quota_day()
         row = self.db.execute("SELECT calls FROM llm_usage WHERE day=? AND model=?",
                               (day, model)).fetchone()
         return int(row["calls"]) if row else 0
 
     def bump_usage(self, model: str) -> None:
-        day = time.strftime("%Y-%m-%d")
+        day = quota_day()
         self.db.execute(
             "INSERT INTO llm_usage(day,model,calls) VALUES(?,?,1) "
             "ON CONFLICT(day,model) DO UPDATE SET calls=calls+1", (day, model))
@@ -177,7 +195,7 @@ class Store:
         """kind: 'rate_limited' or 'errors' (free-tier usage page)."""
         if kind not in ("rate_limited", "errors"):
             return
-        day = time.strftime("%Y-%m-%d")
+        day = quota_day()
         self.db.execute(
             f"INSERT INTO llm_stats(day,model,{kind},last_error,last_at) VALUES(?,?,1,?,?) "
             f"ON CONFLICT(day,model) DO UPDATE SET {kind}={kind}+1, last_error=excluded.last_error, "
@@ -185,7 +203,7 @@ class Store:
         self.db.commit()
 
     def usage_report(self, days: int = 7) -> dict:
-        since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
+        since = quota_day(time.time() - (days - 1) * 86400)
         calls = self.db.execute("SELECT day, model, calls FROM llm_usage WHERE day>=? ORDER BY day", (since,)).fetchall()
         stats = self.db.execute("SELECT day, model, rate_limited, errors, last_error, last_at FROM llm_stats "
                                 "WHERE day>=?", (since,)).fetchall()

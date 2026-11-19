@@ -13,9 +13,11 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..agent import Assistant
-from .. import activity, cleanup, insights, metadata, safe, schedule as sched
+from .. import activity, cleanup, insights, launch, learn, metadata, safe, schedule as sched
 from ..config import load_config
 from ..pipeline import Pipeline
+from .. import extras
+from ..quota import day_start, next_quota_reset, quota_day, reset_text
 from ..llm_limits import as_rows as limit_rows, limits_for, peak_for
 from ..store import Store
 from . import settings_store as ss
@@ -30,6 +32,13 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
     jm = JobManager(root, config_path)
     assistant = Assistant(root, config_path, jm)
     assistant.start()
+    try:                                  # after every start (e.g. after copying an update) check that everything loads
+        _c0 = load_config(config_path, root=root)
+        _s0 = Store(_c0.path("paths.db"))
+        extras.run_startup_check(_c0, _s0)
+        _s0.close()
+    except Exception:
+        pass
 
     def cfg():
         return load_config(config_path, root=root)
@@ -124,7 +133,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         c = cfg()
         st = store(c)
         now = time.time()
-        midnight = time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d"))
+        midnight = day_start()   # quota day starts at midnight Pacific time (13:00 PKT in winter)
         calls = st.calls_since(midnight - 6 * 86400)
         cool = st.cooldowns()
         today = [r for r in calls if r["ts"] >= midnight]
@@ -133,7 +142,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         def m(name):
             lim = limits_for(name) or {}
             return models.setdefault(name, {"model": name, "ok": 0, "fail": 0, "rpm_now": 0, "rpm_peak": 0,
-                                            "last_error": "", "last_at": None, "limit_rpd": lim.get("rpd"),
+                                            "last_error": "", "last_at": None, "limit_rpd": lim.get("rpd"), "used_today": st.usage_today(name),
                                             "limit_rpm": lim.get("rpm"), "limit_tpm": lim.get("tpm"),
                                             "google_peak": peak_for(name), "cooldown": None, "per_min": {}})
         for name in c.get("llm.models", []) or []:
@@ -154,7 +163,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         days: dict[str, int] = {}
         for r in calls:
             if r["ok"]:
-                k = time.strftime("%Y-%m-%d", time.localtime(r["ts"]))
+                k = quota_day(r["ts"])
                 days[k] = days.get(k, 0) + 1
         recent = [{"ts": r["ts"], "model": r["model"], "ok": bool(r["ok"]), "err": r["err"] or ""}
                   for r in calls[-25:]][::-1]
@@ -164,7 +173,8 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                 "now": now, "ok_today": sum(d["ok"] for d in rows), "fail_today": sum(d["fail"] for d in rows),
                 "rpm_now": sum(d["rpm_now"] for d in rows), "models": rows, "recent": recent,
                 "days": [{"day": d, "calls": n} for d, n in sorted(days.items())],
-                "configured_models": list(c.get("llm.models", [])), "limits": limit_rows()}
+                "configured_models": list(c.get("llm.models", [])), "limits": limit_rows(),
+                "reset_text": reset_text(), "reset_at": next_quota_reset(), "quota_day": quota_day()}
 
     # ------------------------------------------------------------------ settings
     @app.get("/api/settings")
@@ -291,7 +301,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             "feature": j.get("feature_name", ""), "category": j.get("category", ""),
             "confidence": j.get("confidence"), "interest": j.get("interest"),
             "evidence": j.get("visible_evidence", []), "what": j.get("what_happens", ""),
-            "reason": reason, "qa_ok": qa.get("ok"), "has_file": bool(path and Path(path).is_file()),
+            "reason": reason, "hint": extras.humanize_error(reason), "qa_ok": qa.get("ok"), "has_file": bool(path and Path(path).is_file()),
             "youtube_id": r["youtube_id"] if "youtube_id" in r.keys() else None,
             "video_name": Path(v["path"]).parent.name if v else "", "updated": r["updated"],
             "tags": json.loads(r["tags"]) if r["tags"] else [], "has_thumb": bool(r["thumb"] and Path(r["thumb"]).is_file()),
@@ -388,6 +398,12 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             raise HTTPException(503, f"AI not available right now: {e}")
         fields = {"title": meta["title"], "description": meta["description"], "tags": meta["tags"], "review": None}
         try:
+            jj = json.loads(r["judgement"])
+            if jj.pop("manual_meta", None):
+                fields["judgement"] = jj              # AI wrote them again: a later rebuild may replace them too
+        except Exception:
+            pass
+        try:
             frame = metadata.pick_frame(r["path"], 0, probe(r["path"])["duration"], None, p.cdir(r["video_id"], cid) / "thumb2")
             fields["thumb"] = str(metadata.make_thumbnail(frame, Path(r["path"]).with_suffix(".jpg"), metadata.thumb_line(meta, "", meta["title"]), c))
         except Exception:
@@ -416,9 +432,54 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         fields = {k: str(body[k]) for k in ("title", "description") if k in body}
         if "tags" in body:
             fields["tags"] = [t.strip() for t in (body["tags"] if isinstance(body["tags"], list) else str(body["tags"]).split(",")) if t.strip()]
+        st = store()
+        try:
+            r = st.clip(cid)
+        except KeyError:
+            raise HTTPException(404, "clip not found")
         if fields:
-            store().update_clip(cid, **fields)
+            st.update_clip(cid, **fields)
+            if r["judgement"]:                       # remember that the owner wrote these: a rebuild must keep them
+                j = json.loads(r["judgement"])
+                j["manual_meta"] = True
+                st.update_clip(cid, judgement=j)
         return {"ok": True}
+
+    @app.post("/api/clips/{cid}/revoice")
+    def revoice(cid: int, body: dict = Body(...)):
+        """New voice-over from the script text you edited: only the voice, captions and video are made again
+        (no AI call for the script, title or description)."""
+        from ..narrate import target_words, validate_script
+        c = cfg()
+        st = store(c)
+        try:
+            r = st.clip(cid)
+        except KeyError:
+            raise HTTPException(404, "clip not found")
+        if not r["judgement"]:
+            raise HTTPException(404, "clip not found")
+        if r["status"] not in ("ready", "approved", "dropped", "error", "judged"):
+            raise HTTPException(400, "This clip was already uploaded")
+        script = " ".join(str(body.get("script", "")).split())
+        j = json.loads(r["judgement"])
+        dur = float(j.get("end_offset", 0)) - float(j.get("start_offset", 0)) or 30.0
+        lo, hi = target_words(dur, c)
+        n = len(script.split())
+        if n < 6:
+            raise HTTPException(400, "Script bahut chhota hai (kam az kam 6 alfaz).")
+        if n > hi * 1.4:
+            raise HTTPException(400, f"Script bahut lamba hai ({n} alfaz). Is clip ke liye {lo}-{hi} alfaz theek hain.")
+        bad = [p for p in validate_script(script, " ".join([j.get("feature_name", ""), j.get("what_happens", ""), " ".join(j.get("visible_evidence", []))]
+                                          + [w for _t, w in j.get("timeline_clip", [])]), 0, 10_000, "", False)
+               if p.startswith(("contains", "number"))]
+        if bad:
+            raise HTTPException(400, "; ".join(bad))
+        j.pop("beats", None)
+        j.pop("beats_script", None)
+        st.update_clip(cid, status="judged", script=script, judgement=j, error=None, review=None)
+        st.kv_set(f"rv:{cid}", "0")
+        job = jm.submit("build", f"New voice: clip {cid}", video_id=r["video_id"])
+        return {"id": job.id}
 
     # ------------------------------------------------------------------ schedule / assistant / notifications
     @app.get("/api/schedule")
@@ -448,7 +509,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                 "state": assistant.state, "sources": list(reversed(srcs))[:40],
                 "counts": {s: len(st.clips(status=s)) for s in ("ready", "approved", "uploaded", "rejected")},
                 "unread": sum(1 for n in st.notifications(50) if not n["read"]),
-                "safe": safe.info(st),
+                "safe": safe.info(st), "launch": launch.status(st),
                 "disk": {"free_gb": round(cleanup.free_gb(c.path("paths.workdir")), 1),
                          "last": json.loads(st.kv_get("cleanup_last", "null") or "null")}}
 
@@ -469,7 +530,25 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             n = insights.collect(store(c), c)
         except Exception as e:
             raise HTTPException(400, f"{type(e).__name__}: {str(e)[:300]}")
+        try:
+            learn.refresh(store(c), c)
+        except Exception:
+            pass
         return {"updated": n}
+
+    @app.get("/api/learn")
+    def learn_report():
+        c = cfg()
+        st = store(c)
+        r = learn.load(st) or learn.build(st, c)
+        r["analytics_on"] = bool(c.get("upload.analytics", False))
+        r["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(r.get("playbook"))
+        return r
+
+    @app.post("/api/learn/refresh")
+    def learn_refresh():
+        c = cfg()
+        return learn.refresh(store(c), c)
 
     @app.post("/api/insights/apply-slots")
     def insights_apply():
@@ -526,6 +605,29 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                 n += 1
         assistant.wake()
         return {"requeued": n}
+
+    @app.get("/api/launch")
+    def launch_info():
+        return launch.status(store())
+
+    @app.post("/api/launch")
+    def launch_set(body: dict = Body(default={})):
+        c = cfg()
+        st = store(c)
+        if body.get("off"):
+            launch.stop(st)
+            return launch.status(st)
+        gap = int(body.get("gap") or c.get("schedule.launch_gap_minutes", 60))
+        out = launch.start(st, int(body.get("count") or 3), gap)
+        out["moved"], out["failed"] = 0, []
+        if body.get("reset_existing", True):
+            try:
+                r = launch.reschedule_existing(c, st)
+                out["moved"], out["failed"] = r["moved"], r["failed"]
+            except Exception as e:
+                out["failed"] = [{"clip": 0, "error": str(e)[:200]}]
+        assistant.wake()
+        return out
 
     @app.post("/api/safe")
     def safe_set(body: dict = Body(...)):
@@ -590,6 +692,41 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         assistant.wake()
         return {"ok": True}
 
+    def quota_summary(c, st, now) -> dict:
+        """Gemini models with today's calls / free limit, cooldowns and the reset time (for the dashboard meter)."""
+        cd = st.cooldowns()
+        rows = []
+        for m in list(c.get("llm.models", []) or []):
+            lim = (limits_for(m) or {}).get("rpd")
+            used = st.usage_today(m)
+            rows.append({"model": m, "used": used, "limit": lim, "left": (max(0, lim - used) if lim else None),
+                         "cooling": ({"reason": cd[m]["reason"], "left": int(cd[m]["until"] - now)} if m in cd else None)})
+        tts_rows = []
+        for m in list(c.get("narration.gemini_models", []) or []):
+            lim = (limits_for(m) or {}).get("rpd")
+            used = st.usage_today(m)
+            k = "tts:" + m
+            tts_rows.append({"model": m, "used": used, "limit": lim, "left": (max(0, lim - used) if lim else None),
+                             "cooling": ({"reason": cd[k]["reason"], "left": int(cd[k]["until"] - now)} if k in cd else None)})
+        usable = [r for r in rows if not r["cooling"] and (r["left"] is None or r["left"] > 0)]
+        return {"models": rows, "tts": tts_rows, "usable": len(usable), "total": len(rows),
+                "reset_text": reset_text(now), "reset_in": int(next_quota_reset(now) - now),
+                "total_left": sum(r["left"] for r in rows if r["left"] is not None and not r["cooling"])}
+
+    @app.get("/api/selftest")
+    def selftest_api(online: bool = Query(False)):
+        c = cfg()
+        res = extras.selftest(c, store(c), root, online=online)
+        return {"checks": res, "ok": not any(x["level"] == "bad" for x in res),
+                "bad": sum(1 for x in res if x["level"] == "bad"), "warn": sum(1 for x in res if x["level"] == "warn"), "ts": time.time()}
+
+    @app.get("/api/startup-check")
+    def startup_check():
+        try:
+            return json.loads(store().kv_get("startup_check", "") or "null") or {"bad": [], "warn": [], "ts": None}
+        except Exception:
+            return {"bad": [], "warn": [], "ts": None}
+
     @app.get("/api/assistant/live")
     def assistant_live():
         """Everything the 'Right now' card shows: current step, what exactly is happening, progress, recent events."""
@@ -634,6 +771,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                            "scheduled": len(future), "uploaded": len(st.clips(status="uploaded")),
                            "rejected": len(st.clips(status="rejected")),
                            "next_publish": sched.fmt_pkt(__import__("datetime").datetime.fromtimestamp(nxt, __import__("datetime").timezone.utc)) if nxt else ""}
+        out["quota"] = quota_summary(c, st, now)
         if out["mode"] == "idle":
             queued = st.agent_sources("queued")
             if not out["enabled"]:
@@ -723,7 +861,16 @@ def serve(root: str = ".", config_path: str | None = None, host: str = "127.0.0.
     import threading
     import webbrowser
 
+    import logging
+
     import uvicorn
+
+    class _QuietResets(logging.Filter):
+        """Windows prints a scary traceback when the browser closes a connection; it is harmless."""
+        def filter(self, record):
+            ei = record.exc_info
+            return not (ei and isinstance(ei[1], (ConnectionResetError, ConnectionAbortedError)))
+    logging.getLogger("asyncio").addFilter(_QuietResets())
     app = create_app(root, config_path)
     url = f"http://{host}:{port}"
     print(f"featureclip UI: {url}   (press Ctrl+C in this window to stop)")

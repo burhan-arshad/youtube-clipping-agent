@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import metadata, safe, schedule, captions, candidates, compose, judge, layout as lay, music, narrate, qa, signals, uploader
+from . import launch, learn, metadata, safe, schedule, captions, candidates, compose, judge, layout as lay, music, narrate, qa, signals, uploader
 from .ffutil import extract_audio_wav, probe
 from .ingest import describe, ingest
 from .llm import LLM, LLMError
@@ -64,6 +64,10 @@ class Pipeline:
         info = describe(path)
         vid = self.store.add_video(src.id, str(path), info)
         vdir = self.vdir(vid)
+        if self.store.refresh_video(vid, info):
+            (vdir / "signals.npz").unlink(missing_ok=True)       # same file name, new recording: old analysis is wrong
+            (vdir / "layout.json").unlink(missing_ok=True)
+            log("this file name was used by an older recording: old analysis cleared")
         log(f"video {vid}: {path.name}  {info['duration'] / 60:.1f} min  {info['width']}x{info['height']}")
 
         sig_file = vdir / "signals.npz"
@@ -114,6 +118,10 @@ class Pipeline:
         path = video["path"]
         max_clips = int(self.cfg.get("judge.max_clips_per_video"))
         todo = sorted(self.store.clips(video_id, "candidate"), key=lambda c: -c["signal_score"])
+        cap = int(self.cfg.get("judge.max_windows_per_video", 7))
+        for c in todo[cap:]:                                   # weaker windows are skipped to save the free AI quota
+            self.store.update_clip(c["id"], status="dropped", error="not judged: weaker window (saves AI quota)")
+        todo = todo[:cap]
         accepted: list[tuple[int, dict]] = [
             (c["id"], json.loads(c["judgement"])) for c in self.store.clips(video_id, "judged")]
         log(f"judging up to {len(todo)} candidates (stops early once enough good ones are found)")
@@ -148,16 +156,41 @@ class Pipeline:
             else:
                 self.store.update_clip(c["id"], status="dropped", judgement=j, error=j["decision_reason"])
                 log(f"  clip {c['id']} @ {c['start']:.0f}s: drop ({j['decision_reason']})")
-        keep = set(judge.dedupe(accepted, max_clips))
+        from . import styles as _styles
+        keep = set(judge.dedupe(accepted, max_clips, _styles.category_boost(self.store, self.cfg)))
         # same feature already made from an earlier video/live segment of this source -> skip
         seen = self._seen_features(video["source_id"], video_id)
         for cid, j in accepted:
             if cid in keep and judge.feature_key(j["feature_name"]) in seen:
                 keep.discard(cid)
                 log(f"  clip {cid}: feature {j['feature_name']!r} already made before -> skipped")
+        # the same moment found twice (overlapping windows, or an earlier clip that looks the same)
+        spans = {c["id"]: (c["start"] + (json.loads(c["judgement"]).get("start_offset") or 0),
+                           c["start"] + (json.loads(c["judgement"]).get("end_offset") or 0))
+                 for c in self.store.clips(video_id) if c["judgement"]}
+        earlier = [json.loads(c["judgement"]) for c in self.store.clips()
+                   if c["video_id"] != video_id and c["status"] in ("ready", "approved", "uploaded", "judged") and c["judgement"]]
+        kept_js: list[tuple[int, dict]] = []
+        for cid, j in sorted(accepted, key=lambda t: -(t[1]["interest"] + t[1]["confidence"])):
+            if cid not in keep:
+                continue
+            if any(judge.same_moment(j, k, spans.get(cid), spans.get(kc)) for kc, k in kept_js) \
+                    or any(judge.same_moment(j, e) for e in earlier):
+                keep.discard(cid)
+                log(f"  clip {cid}: same moment as another clip -> skipped")
+                continue
+            kept_js.append((cid, j))
+        # quality gate: boring clips ("a man walks along a road") do not get views. Keep the best few of each piece and
+        # drop the rest when their interest is under the floor.
+        floor, keep_min = float(self.cfg.get("judge.quality_floor", 55)), int(self.cfg.get("judge.keep_min", 2))
+        ranked = [t for t in sorted(accepted, key=lambda t: -(t[1]["interest"] + 0.3 * t[1]["confidence"])) if t[0] in keep]
+        for pos, (cid, j) in enumerate(ranked):
+            if pos >= keep_min and j["interest"] < floor:
+                keep.discard(cid)
+                log(f"  clip {cid}: interest {j['interest']:.0f} is under the quality floor {floor:.0f} -> skipped")
         for cid, _ in accepted:
             if cid not in keep:
-                self.store.update_clip(cid, status="dropped", error="duplicate feature or over the per-video limit")
+                self.store.update_clip(cid, status="dropped", error="duplicate feature, low interest or over the per-video limit")
         self.store.set_video_stage(video_id, "judged")
         log(f"judge done: {len(keep)} clips kept")
         return len(keep)
@@ -224,6 +257,9 @@ class Pipeline:
         start = c["start"] + j["start_offset"]
         dur = j["end_offset"] - j["start_offset"]
         dur = min(dur, video["duration"] - start)
+        if dur < 2.0:                          # the window lies outside the file (stale record): never build a negative clip
+            self.store.update_clip(clip_id, status="dropped", error="clip window is outside the video file")
+            return "dropped"
         tr = self._transcript_for(video["path"], c)
 
         L = self._layout(video["id"], src)
@@ -244,7 +280,11 @@ class Pipeline:
                 log("  scene timeline: " + "; ".join(f"{t:.0f}s {w[:40]}" for t, w in timeline["events"][:4]) + " ...")
             min_match = float(g("judge.min_script_match", 70))
             feedback, s, check = "", None, None
-            for attempt in range(3):
+            best = None                                   # (match, script_dict, check): the best attempt so far
+            from . import styles as _styles
+            narrate.STYLE_WEIGHTS = _styles.weights(self.store, self.cfg)
+            narrate.PLAYBOOK = metadata.PLAYBOOK = learn.playbook_text(self.store, self.cfg)
+            for attempt in range(int(g("judge.script_attempts", 2))):
                 s = narrate.write_script(self.llm, self.cfg, j, tr.text, dur, images=tl_imgs, feedback=feedback,
                                          timeline=timeline)
                 check = narrate.verify_script(self.llm, self.cfg, j, s["script"], tl_imgs, times=tl_times,
@@ -253,22 +293,32 @@ class Pipeline:
                     self.store.update_clip(clip_id, status="dropped",
                                            error="streamer / webcam / chat visible in the final picture")
                     return "dropped"
+                if best is None or check["match"] > best[0]:
+                    best = (check["match"], s, check)
                 if check["match"] >= min_match:
                     break
                 feedback = f"the checker said the script does not match the pictures or their timing ({check['problems']})"
                 log(f"  script match {check['match']:.0f}/100, rewriting ...")
             else:
-                self.store.update_clip(clip_id, status="dropped",
-                                       error=f"script does not match the video ({check['match']:.0f}/100: {check['problems']})")
-                return "dropped"
+                floor = float(g("judge.script_floor", 35))
+                if best and best[0] >= floor:             # not perfect, but usable: keep the best try instead of losing the clip
+                    _, s, check = best
+                    log(f"  script match only {check['match']:.0f}/100: using the best try anyway (floor {floor:.0f})")
+                else:
+                    self.store.update_clip(clip_id, status="dropped",
+                                           error=f"script does not match the video ({check['match']:.0f}/100: {check['problems']})")
+                    return "dropped"
             script, hook = s["script"], s.get("title") or s.get("on_screen_hook", "")
             beats = s.get("beats")
             j["beats"], j["beats_script"] = beats, script
+            j["styles"] = s.get("styles") or {}
+            j["hook"] = hook
             self.store.update_clip(clip_id, script=script, judgement=j)
-        hook = hook or j.get("hook_title", "")
+        hook = hook or j.get("hook") or j.get("hook_title", "")
 
         wav = cd / "narration.wav"
-        n = narrate.synthesize(self.cfg, script, wav, max_duration=dur - lead - 0.8, beats=beats, lead=lead)
+        n = narrate.synthesize(self.cfg, script, wav, max_duration=dur - lead - 0.8, beats=beats, lead=lead,
+                               tone=narrate.tone_for(j, self.cfg))
         need = n.duration + lead + 0.8
         if need > dur:  # extend the clip a little (if the video has footage left and limits allow)
             new_dur = min(need, clip_max + 4, video["duration"] - start)
@@ -305,8 +355,17 @@ class Pipeline:
         name = f"{video['id']:03d}_{clip_id:04d}_{slugify(j['feature_name'])}.mp4"
         dest = self.out / name
         shutil.copy2(final, dest)
-        meta = metadata.generate(self.llm, self.cfg, j, script, hook, src.streamer if src else "",
-                                 src.credit_url if src else "")
+        ts = (j.get("styles") or {}).get("title")
+        if j.get("manual_meta"):                   # the owner edited title/description by hand: keep them
+            try:
+                tg = json.loads(c["tags"]) if c["tags"] else []
+            except Exception:
+                tg = []
+            meta = {"title": c["title"] or "", "description": c["description"] or "", "tags": tg, "thumb_text": ""}
+        else:
+            meta = metadata.generate(self.llm, self.cfg, j, script, hook, src.streamer if src else "",
+                                     src.credit_url if src else "",
+                                     title_style=narrate.TITLE_STYLES[ts] if isinstance(ts, int) and 0 <= ts < len(narrate.TITLE_STYLES) else "")
         thumb = None
         try:
             frame = metadata.pick_frame(video["path"], start, dur, crop, cd / "thumb")
@@ -377,6 +436,11 @@ class Pipeline:
         if safe.is_on(self.store):
             log("SAFE MODE is on: nothing is uploaded (switch it off in the Assistant tab)")
             return 0
+        until = float(self.store.kv_get("upload_pause_until", "0") or 0)
+        if not dry_run and time.time() < until:
+            log("YouTube's upload limit was reached: uploads wait until "
+                + datetime.fromtimestamp(until, schedule.PKT).strftime("%H:%M PKT") + " (approved clips are kept)")
+            return 0
         sched = bool(self.cfg.get("schedule.enabled", True))
         slots = schedule.parse_slots(self.cfg.get("schedule.slots", schedule.DEFAULT_SLOTS)) or schedule.parse_slots(schedule.DEFAULT_SLOTS)
         now = datetime.now(timezone.utc)
@@ -389,23 +453,37 @@ class Pipeline:
         if limit is not None:
             room = min(room, limit)
         done = 0
-        for c in self.store.clips(status="approved"):
+        def _quality(c) -> float:                      # the best clips get the earliest publish slots
+            try:
+                j = json.loads(c["judgement"] or "{}")
+                return float(j.get("interest", 0)) + float(j.get("confidence", 0)) * 0.3
+            except Exception:
+                return 0.0
+        for c in sorted(self.store.clips(status="approved"), key=lambda c: -_quality(c)):
             if only is not None and c["id"] not in only:
                 continue
             if done >= room:
                 log("upload limit reached (" + ("schedule is full for the next days; raise Settings > schedule days ahead"
                     if sched else "daily cap upload.max_per_day") + ")")
                 break
-            when = None
+            when, public_now, launch_idx = None, False, None
             if sched:
-                nxt = schedule.next_slots(now, 1, slots, taken)
-                if not nxt:
-                    log("no free publish slot found")
-                    break
-                when = nxt[0]
+                lt = launch.next_time(self.store, now.timestamp())
+                if lt is not None:                           # launch mode: now, +1 h, +2 h ... then the normal slots
+                    launch_idx = lt[0]
+                    if lt[1] is None:
+                        public_now = True
+                    else:
+                        when = lt[1]
+                if when is None and not public_now:
+                    nxt = schedule.next_slots(now, 1, slots, taken)
+                    if not nxt:
+                        log("no free publish slot found")
+                        break
+                    when = nxt[0]
             tags = json.loads(c["tags"]) if c["tags"] else None
             body = uploader.build_body(c["title"], c["description"], self.cfg, tags,
-                                       schedule.iso_utc(when) if when else None)
+                                       schedule.iso_utc(when) if when else None, public=public_now)
             if dry_run:
                 log(f"[dry-run] would upload clip {c['id']}: {c['title']!r} "
                     + (f"publish at {schedule.fmt_pkt(when)}" if when else f"privacy={body['status']['privacyStatus']}"))
@@ -416,6 +494,14 @@ class Pipeline:
             try:
                 r = uploader.upload_full(c["path"], body, self.cfg, c["thumb"])
             except Exception as e:
+                if "uploadLimitExceeded" in str(e) or "exceeded the number of videos" in str(e):
+                    hours = float(self.cfg.get("upload.limit_pause_hours", 6))
+                    self.store.kv_set("upload_pause_until", str(time.time() + hours * 3600))
+                    self.store.update_clip(c["id"], error="YouTube daily upload limit reached; will retry later")
+                    log(f"YouTube says the channel reached its upload limit: stopping uploads for {hours:g} h "
+                        f"(approved clips stay in the queue, nothing is lost)")
+                    self.upload_results.append({"clip": c["id"], "ok": False, "limit": True, "error": str(e)[:300]})
+                    break                                    # no point trying the other clips: they would fail the same way
                 self.store.update_clip(c["id"], error=f"upload: {type(e).__name__}: {e}")
                 log(f"clip {c['id']}: upload failed: {e}")
                 self.upload_results.append({"clip": c["id"], "ok": False, "error": str(e)[:300]})
@@ -426,8 +512,11 @@ class Pipeline:
                  if when else str(r["privacy"])))
             if when:
                 taken.append(when)
+            if launch_idx is not None:
+                launch.mark_used(self.store, launch_idx)
             self.store.update_clip(c["id"], status="uploaded", youtube_id=r["id"], error=None,
-                                   scheduled_at=when.timestamp() if when else None, publish_state=state)
+                                   scheduled_at=(when.timestamp() if when else (now.timestamp() if public_now else None)),
+                                   publish_state=state)
             log(f"clip {c['id']}: uploaded https://youtube.com/shorts/{r['id']}  ({state})"
                 + ("" if r["thumb_ok"] is None else (" thumbnail set" if r["thumb_ok"] else f" thumbnail not accepted ({r['thumb_error'][:60]})")))
             self.upload_results.append({"clip": c["id"], "ok": True, "id": r["id"], "state": state,

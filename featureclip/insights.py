@@ -57,7 +57,8 @@ def clip_rows(store, min_age_hours: float = 12.0) -> list[dict]:
         if age_h < min_age_hours:
             continue
         views = st["views"] or 0
-        rows.append({"id": c["id"], "title": (c["title"] or "")[:70], "category": category_of(c),
+        sty = _j(c["judgement"], {}).get("styles") or {}
+        rows.append({"hook_style": sty.get("hook"), "title_style": sty.get("title"), "id": c["id"], "title": (c["title"] or "")[:70], "category": category_of(c),
                      "slot": slot_key(t), "age_h": round(age_h, 1), "views": views, "likes": st["likes"] or 0,
                      "comments": st["comments"] or 0, "avg_pct": st["avg_view_pct"],
                      "rate": views / max(6.0, min(age_h, 72.0)),          # views per hour, first 3 days at most

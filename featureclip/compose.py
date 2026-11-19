@@ -63,7 +63,7 @@ def audio_filter(cfg, dur: float, has_game_audio: bool, lead_in: float, music: b
         graph = (
             f"{narr},asplit[n1][n2];"
             f"[2:a]aresample=48000,volume={mdb}dB,afade=t=in:st=0:d=1.2,afade=t=out:st={fo:.3f}:d=1.8[m0];"
-            f"[m0][n1]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=450[md];"
+            f"[m0][n1]sidechaincompress=threshold=0.015:ratio=12:attack=10:release=650[md];"
             f"[n2][md]amix=inputs=2:duration=longest:normalize=0,"
         )
     else:

@@ -23,10 +23,24 @@ from .pipeline import log
 from .sources import resolve_source
 
 
-def stream_urls(url: str, max_height: int = 720) -> list[str]:
+def ytdlp_extra(cfg=None) -> list[str]:
+    """Options every yt-dlp call needs: the JS challenge solver and the cookies that answer YouTube's
+    'Sign in to confirm you're not a bot' (Settings -> Download)."""
+    out = ["--remote-components", "ejs:github"]
+    if cfg is not None:
+        cfile, browser = cfg.get("ingest.cookies_file"), cfg.get("ingest.cookies_from_browser")
+        if cfile:
+            out += ["--cookies", str(cfile)]
+        elif browser:
+            out += ["--cookies-from-browser", str(browser)]
+    return out
+
+
+def stream_urls(url: str, max_height: int = 720, cfg=None) -> list[str]:
     """Direct media URL(s) of a live stream, via yt-dlp (video and audio may be separate)."""
     exe = shutil.which("yt-dlp")
     cmd = [exe] if exe else [sys.executable, "-m", "yt_dlp"]
+    cmd += ytdlp_extra(cfg)
     cmd += ["-g", "--no-playlist", "-f", f"b[height<={max_height}]/bv*[height<={max_height}]+ba/b", url]
     p = subprocess.run(cmd, capture_output=True, text=True)
     urls = [u for u in p.stdout.split() if u.startswith("http")]
@@ -36,18 +50,43 @@ def stream_urls(url: str, max_height: int = 720) -> list[str]:
     return urls
 
 
-def is_live(url: str) -> bool | None:
+def is_live(url: str, cfg=None) -> bool | None:
     """True/False from yt-dlp, None if it cannot tell."""
     exe = shutil.which("yt-dlp")
     cmd = [exe] if exe else [sys.executable, "-m", "yt_dlp"]
-    try:
-        p = subprocess.run(cmd + ["--print", "%(live_status)s", "--no-playlist", url], capture_output=True, text=True, timeout=60)
-    except Exception:
-        return None
-    out = p.stdout.strip().splitlines()
-    if p.returncode == 0 and out:
-        return out[-1].strip().lower() in ("is_live", "is_upcoming", "true")
+    for _ in range(2):                                   # one retry: a slow answer must not make a live link look "unknown"
+        try:
+            p = subprocess.run(cmd + ytdlp_extra(cfg) + ["--print", "%(live_status)s", "--no-playlist", url], capture_output=True, text=True, timeout=75)
+        except Exception:
+            continue
+        out = p.stdout.strip().splitlines()
+        if p.returncode == 0 and out:
+            return out[-1].strip().lower() in ("is_live", "is_upcoming", "true")
     return None
+
+
+_HLS_OPTS: list[str] | None = None
+
+
+def hls_input_options() -> list[str]:
+    """Newer ffmpeg builds refuse some YouTube segment file names ("not in allowed_segment_extensions").
+    Add the options that switch that check off, but only the ones this ffmpeg knows (unknown options make it fail)."""
+    global _HLS_OPTS
+    if _HLS_OPTS is None:
+        opts: list[str] = []
+        try:
+            h = subprocess.run(["ffmpeg", "-hide_banner", "-h", "demuxer=hls"], capture_output=True, text=True, timeout=20)
+            txt = h.stdout + h.stderr
+            if "allowed_segment_extensions" in txt:
+                opts += ["-allowed_segment_extensions", "ALL"]
+            if "extension_picky" in txt:
+                opts += ["-extension_picky", "0"]
+            if "-allowed_extensions" in txt:
+                opts += ["-allowed_extensions", "ALL"]
+        except Exception:
+            pass
+        _HLS_OPTS = opts
+    return _HLS_OPTS
 
 
 def start_recorder(inputs: list[str], out_dir: Path, seconds: int, run: int = 0) -> subprocess.Popen:
@@ -59,6 +98,8 @@ def start_recorder(inputs: list[str], out_dir: Path, seconds: int, run: int = 0)
         if Path(i).is_file():
             cmd += ["-re"]
             i = str(Path(i).resolve())
+        elif ".m3u8" in i or "manifest" in i or "hls" in i.lower():
+            cmd += hls_input_options()
         cmd += ["-i", i]
     cmd += ["-map", "0:v:0", "-map", f"{len(inputs) - 1}:a:0?", "-c", "copy",
             "-f", "segment", "-segment_time", str(seconds), "-reset_timestamps", "1",
@@ -87,12 +128,14 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
 
     # ------------------------------------------------------------ recorder thread (no database access here)
     def recorder_loop() -> None:
-        rec, run, seen = None, 0, set(existing)
+        import re as _re
+        used = [int(m.group(1)) for f in out_dir.glob("seg_r*") if (m := _re.match(r"seg_r(\d+)_", f.name))]
+        rec, run, seen = None, (max(used) + 1 if used else 0), set(existing)   # a new run never reuses an old piece name
         try:
             while not stop_evt.is_set():
                 if rec is None:
                     try:
-                        inputs = [local_test_file] if local_test_file else stream_urls(url, max_height)
+                        inputs = [local_test_file] if local_test_file else stream_urls(url, max_height, pipe.cfg)
                         rec = start_recorder(inputs, out_dir, segment_seconds, run)
                         state["recorder"] = rec
                         run += 1
@@ -112,7 +155,7 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
                 if finished:
                     # ffmpeg ending cleanly can also mean an expired stream link while the stream is still live
                     clean_but_live = (rec.returncode == 0 and not local_test_file and not stop_evt.is_set()
-                                      and time.time() < stop_at and is_live(url) is True)
+                                      and time.time() < stop_at and is_live(url, pipe.cfg) is True)
                     if (rec.returncode not in (0, None) and not local_test_file and time.time() < stop_at) or clean_but_live:
                         log("recording interrupted, reconnecting ...")
                         rec = None
@@ -140,12 +183,33 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
         while time.time() < end:
             time.sleep(1.0)
 
+    def _stock_full() -> bool:
+        """Enough finished/scheduled clips already: spend no more AI quota on this piece."""
+        try:
+            target = int(pipe.cfg.get("assistant.stock_target", 0) or 0)
+            if target <= 0:
+                return False
+            st = pipe.store
+            now = time.time()
+            stock = (sum(1 for c in st.clips(status="uploaded") if c["scheduled_at"] and c["scheduled_at"] > now)
+                     + len(st.clips(status="approved")) + len(st.clips(status="ready")))
+            return stock >= target
+        except Exception:
+            return False
+
     def drain(vid: int) -> None:
         """judge + build until nothing is left. AI limit exhausted -> wait and try again, never skip."""
         from .llm import LLMError
         st = pipe.store
-        for attempt in range(ai_max_retries + 1):
+        attempt = -1
+        while True:
+            attempt += 1
             try:
+                if _stock_full():
+                    for c in st.clips(vid, "candidate") + st.clips(vid, "judged"):
+                        st.update_clip(c["id"], status="dropped", error="enough clips in stock (saves AI quota)")
+                    log("  enough clips in stock already: this piece is skipped to save the AI quota")
+                    return
                 if st.clips(vid, "candidate"):
                     pipe.judge(vid)
                 if st.clips(vid, "judged"):
@@ -158,9 +222,24 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
             if attempt >= ai_max_retries:
                 log(f"  giving up on {left} window(s) of this piece after {ai_max_retries} retries")
                 return
-            log(f"  all AI models are busy / out of quota: {left} window(s) waiting, retry in {ai_retry_seconds}s "
+            wait = ai_retry_seconds
+            try:
+                cd = pipe.store.cooldowns()
+                models = [m for m in pipe.llm.models()]
+                if models and all(m in cd for m in models):
+                    soonest = min(cd[m]["until"] for m in models)
+                    if soonest - time.time() > 600:             # daily quota gone: sleep until it resets, don't hammer
+                        wait = min(soonest - time.time(), 900)
+                        attempt -= 1                             # waiting for the reset does not use up the retries
+                        log(f"  daily AI quota used up (resets about 13:00 PKT): {left} window(s) waiting, "
+                            f"checking again in {int(wait / 60)} min (recording continues)")
+                        wait_interruptible(wait)
+                        continue
+            except Exception:
+                pass
+            log(f"  all AI models are busy / out of quota: {left} window(s) waiting, retry in {wait}s "
                 f"(recording continues, {q.qsize()} more piece(s) queued)")
-            wait_interruptible(ai_retry_seconds)
+            wait_interruptible(wait)
 
     def process(seg: Path) -> None:
         nonlocal handled

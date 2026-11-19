@@ -12,7 +12,7 @@ layout:
 llm:
   provider: gemini      # gemini | openai (Groq / OpenRouter / any OpenAI-compatible API)
   # Check the model names in Google AI Studio; run `doctor --ping` to test them.
-  models: ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
+  # models: [...]   # leave this out: the program already tries 10 free models in a good order and moves on by itself
   # daily_limit: {"gemini-3.5-flash": 20}   # optional: stay under the free-tier quota
 
 whisper:

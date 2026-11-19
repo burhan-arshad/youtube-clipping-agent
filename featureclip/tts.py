@@ -19,7 +19,10 @@ import time
 import numpy as np
 import requests
 
-GEMINI_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview"]
+from .llm_limits import limits_for
+from .quota import next_quota_reset
+
+GEMINI_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-tts"]
 
 PREBUILT = {
     "Zephyr": "Bright", "Puck": "Upbeat", "Charon": "Informative", "Kore": "Firm", "Fenrir": "Excitable",
@@ -78,6 +81,10 @@ def gemini_speak(cfg, text: str, voice: str | None = None, style: str | None = N
     errors = []
     try:
         for model in models:
+            lim = (limits_for(model) or {}).get("rpd")
+            if lim and st and st.usage_today(model) >= int(lim * 0.96):
+                errors.append(f"{model}: daily limit reached")
+                continue
             if f"tts:{model}" in cool:
                 errors.append(f"{model}: cooling down")
                 continue
@@ -97,7 +104,7 @@ def gemini_speak(cfg, text: str, voice: str | None = None, style: str | None = N
                 if r.status_code == 429:
                     daily = "PerDay" in r.text or "per day" in r.text.lower()
                     if st:
-                        st.set_cooldown(f"tts:{model}", time.time() + (3600 if daily else 60), "rate limited")
+                        st.set_cooldown(f"tts:{model}", (next_quota_reset() if daily else time.time() + 60), "daily quota used up" if daily else "rate limited")
                         st.log_call(model, False, "tts", "429")
                     errors.append(f"{model}: quota")
                     break
@@ -116,6 +123,7 @@ def gemini_speak(cfg, text: str, voice: str | None = None, style: str | None = N
                     break
                 if st:
                     st.log_call(model, True, "tts", "")
+                    st.bump_usage(model)
                 if len(audio[0]) < audio[1] * 0.3:
                     errors.append(f"{model}: empty audio")
                     break

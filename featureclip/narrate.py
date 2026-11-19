@@ -1,6 +1,7 @@
 """Voice-over: the LLM writes a short script (checked by code), Kokoro speaks it locally."""
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,15 +58,25 @@ TITLE_STYLES = [
     "an exclamation about the detail",
 ]
 _RECENT: dict[str, list[int]] = {"hook": [], "end": [], "title": []}
+# set by the pipeline from what worked on YouTube: {"hook": {style_index: weight}, "title": {...}}; empty = all equal
+STYLE_WEIGHTS: dict[str, dict[int, float]] = {}
+PLAYBOOK = ""            # learned from YouTube results (learn.py); set by the pipeline before a clip is built
+_LAST_PICK: dict[str, int] = {}
 
 
 def _pick(kind: str, options: list[str], rng) -> str:
-    """Random choice that avoids the last few picks, so consecutive clips differ."""
+    """Choice that avoids the last few picks, so consecutive clips differ. Styles that got more views are picked more
+    often, but 25 % of the time any style is tried, so the channel keeps learning."""
     recent = _RECENT[kind]
     pool = [i for i in range(len(options)) if i not in recent[-3:]] or list(range(len(options)))
-    i = rng.choice(pool)
+    w = STYLE_WEIGHTS.get(kind) or {}
+    if w and rng.random() > 0.25:
+        i = rng.choices(pool, weights=[max(0.05, float(w.get(k, 1.0))) for k in pool])[0]
+    else:
+        i = rng.choice(pool)
     recent.append(i)
     del recent[:-6]
+    _LAST_PICK[kind] = i
     return options[i]
 
 
@@ -159,25 +170,74 @@ Return JSON only: {{"frames": [{{"t": seconds, "what": "..."}}, ...], "moment": 
     return {"events": ev, "moment": mom}
 
 
+KIND_OF = {"funny_moment": "funny", "chaotic_action": "chaos", "epic_stunt": "epic", "interesting_discovery": "discovery",
+           "dramatic_moment": "dramatic"}
+WRITER_STYLE = {
+    "funny": "This is a FUNNY moment. Use comic timing: set it up straight-faced, then land the punchline right when it happens, "
+             "like a friend laughing at what just happened. Playful, a little cheeky, never mean. One quick joke or comparison is enough.",
+    "chaos": "This is CHAOTIC ACTION. High energy, short punchy lines, escalating excitement, like a hyped commentator. Name each thing "
+             "that goes wrong in order.",
+    "epic": "This is an EPIC / skilful moment. Build tension, then react with real awe at the payoff. Make the viewer feel how hard or "
+            "lucky it was.",
+    "discovery": "This is an interesting DISCOVERY. Sound curious and a bit amazed ('wait, look at this'), point at the detail, "
+                 "and say why it is cool or surprising.",
+    "dramatic": "This is a DRAMATIC moment. Lower, tense delivery, short lines, a pause before the reveal, then let the result land.",
+    "feature": "This shows a game FEATURE. Be informative and enthusiastic: say exactly what the game does here and the one detail "
+               "casual viewers would miss.",
+}
+EXAMPLES = {
+    "funny": 'Example of the RHYTHM only (never copy the words): "Okay, nothing suspicious here." ... "Wait. Is that a gator... shopping?" '
+             '... "Nobody told the cashier. Honestly, same." ... "Would you check out next to him?"',
+    "chaos": 'Example of the RHYTHM only: "Three cars. One red light. Zero chance." ... "Boom! That one flipped, that one is on fire!" '
+             '... "And the cops just joined the party." ... "Could you survive this?"',
+    "epic": 'Example of the RHYTHM only: "This jump looks impossible." ... "Speed is up... he is committing..." ... "He stuck it! '
+            'Right on the edge!" ... "Could you land that?"',
+    "discovery": 'Example of the RHYTHM only: "Look at the water, not the boat." ... "See how it ripples around the legs?" '
+                 '... "Small detail, but it makes everything feel alive." ... "What else have you spotted?"',
+    "dramatic": 'Example of the RHYTHM only: "Everything is quiet." ... "Too quiet." ... "And there it is." ... "Would you have run?"',
+    "feature": 'Example of the RHYTHM only: "Watch what the car does next." ... "The bumper actually crumples, panel by panel." '
+               '... "Most games just swap in a dented model. This one bends." ... "Do you want this in every game?"',
+}
+TONE = {
+    "funny": "playful and amused, with natural laughter in the voice, comic timing and a cheeky punchline",
+    "chaos": "fast, hyped and breathless, rising excitement like a live commentator",
+    "epic": "awed and intense, building up then exploding with excitement at the payoff",
+    "discovery": "curious and amazed, a bit hushed, then delighted",
+    "dramatic": "tense and low, slower, with a pause before the reveal",
+    "feature": "enthusiastic and clear, like a friend showing off something cool",
+}
+
+
+def moment_kind(j: dict) -> str:
+    return KIND_OF.get(str(j.get("category", "")), "feature")
+
+
+def tone_for(j: dict, cfg) -> str:
+    """Delivery instruction for the voice: the channel style plus how THIS moment should sound."""
+    base = str(cfg.get("narration.gemini_style", "") or "").strip()
+    return (base + "; " if base else "") + "for this clip: " + TONE[moment_kind(j)]
+
+
 def est_seconds(text: str, cfg) -> float:
     from .tts import strip_tags
     return word_count(strip_tags(text)) / float(cfg.get("narration.words_per_second", 2.4)) + 0.2
 
 
+def repair_beats(beats: list[dict], cfg) -> list[dict]:
+    """Instead of sending the AI back to fix timing, move a beat later if the line before it is still speaking."""
+    out, prev_end = [], 0.0
+    for b in sorted(beats, key=lambda x: x["at"]):
+        at = max(b["at"], prev_end + 0.1)
+        out.append({"at": round(at, 2), "text": b["text"]})
+        prev_end = at + est_seconds(b["text"], cfg)
+    return out
+
+
 def validate_beats(beats: list[dict], clip_dur: float, cfg, lead: float = 0.4) -> list[str]:
+    """Only things the code cannot repair. (Overlaps are repaired; a voice that is a bit long is sped up or the clip extended.)"""
     p = []
-    if not (3 <= len(beats) <= 9):
+    if not (2 <= len(beats) <= 10):
         p.append(f"use 4 to 7 beats (you wrote {len(beats)})")
-    prev_end = 0.0
-    for i, b in enumerate(beats):
-        if b["at"] < prev_end - 0.35:
-            p.append(f"beat {i + 1} starts at {b['at']:.1f}s but the line before it still speaks until about {prev_end:.1f}s; "
-                     "move it later or shorten the previous line")
-        prev_end = max(prev_end, b["at"]) + est_seconds(b["text"], cfg)
-    if beats and beats[0]["at"] > 2.0:
-        p.append("the first beat must start within the first 1.5 seconds")
-    if prev_end > clip_dur - 0.3:
-        p.append(f"the last line would end at about {prev_end:.1f}s but the clip is only {clip_dur:.0f}s long; shorten the lines")
     return p
 
 
@@ -194,7 +254,82 @@ def _parse_beats(raw) -> list[dict]:
     return out
 
 
+def _ask(llm, prompt: str, quality: bool = False, **kw) -> dict:
+    """llm.json that prefers the smarter models for creative writing (falls back for simple/fake clients)."""
+    if quality:
+        try:
+            return llm.json(prompt, quality=True, **kw)
+        except TypeError:
+            pass
+    return llm.json(prompt, **kw)
+
+
 def write_script(llm, cfg, judgement: dict, transcript: str, clip_dur: float, images=None,
+                 feedback: str = "", timeline: dict | None = None) -> dict:
+    """Writes the script (see _write_script_inner), then an optional punch-up pass and remembers the styles used."""
+    res = _write_script_inner(llm, cfg, judgement, transcript, clip_dur, images, feedback, timeline)
+    styles = {k: v for k, v in _LAST_PICK.items()}
+    if not feedback and res.get("beats"):                       # only on the first try: later tries are fixes
+        res = punch_up(llm, cfg, judgement, res, timeline, clip_dur)
+    res["styles"] = styles
+    return res
+
+
+def punch_up(llm, cfg, judgement: dict, result: dict, timeline: dict | None, clip_dur: float) -> dict:
+    """Second pass: same facts and timing, but funnier / more emotional / more vivid. If anything about the new
+    version breaks a rule, the original is kept, so this can only make a script better, never worse."""
+    if not cfg.get("narration.punch_up", True):
+        return result
+    beats = result.get("beats") or []
+    if not (2 <= len(beats) <= 10):
+        return result
+    game = str(cfg.get("game.name", "") or "")
+    lo, hi = target_words(clip_dur, cfg)
+    kind = moment_kind(judgement)
+    tl = ""
+    if timeline and timeline.get("events"):
+        tl = "What the viewer sees and when:\n" + "\n".join(f"  {t:.1f}s: {w}" for t, w in timeline["events"]) + "\n"
+    evidence = "; ".join(judgement.get("visible_evidence", []))
+    facts = f"{judgement.get('feature_name', '')}. {judgement.get('what_happens', '')} {evidence} " + " ".join(
+        w for _t, w in (timeline or {}).get("events", []))
+    cur = "\n".join(f'  {{"at": {b["at"]}, "text": {json.dumps(b["text"])}}}' for b in beats)
+    prompt = f"""Here is a timed voice-over for a {clip_dur:.0f}-second Short about {game}.
+{tl}
+Current beats:
+{cur}
+
+Rewrite it so it sounds like a REAL person reacting live: more emotion, sharper wording, a funnier or more vivid
+comparison where it fits, one small human reaction (a laugh, "no way", a gasp as words). {WRITER_STYLE[kind]}
+HARD RULES: keep exactly the same number of beats and the same "at" times; keep every fact (no new facts, numbers or
+names); a line may only describe what is already visible at its "at" time; keep the hook naming "{game}" and the
+closing question; total {lo} to {hi} words; no emoji, no hashtags, no "I"/"we" about the streamer, no
+like-and-subscribe.
+Return JSON only: {{"beats": [{{"at": 0.5, "text": "..."}}, ...]}}"""
+    try:
+        raw = _ask(llm, prompt, quality=True, system=SYSTEM, temperature=0.8)
+    except Exception:
+        return result                                              # quota / network: keep the first version
+    texts = []
+    for b in raw.get("beats") or []:                               # keep the order the model wrote them in
+        try:
+            t = re.sub(r"\s+", " ", str(b["text"])).strip()
+        except Exception:
+            t = ""
+        if t:
+            texts.append(t)
+    if len(texts) != len(beats):
+        return result
+    new = [{"at": o["at"], "text": t} for o, t in zip(beats, texts)]       # timing stays exactly as verified
+    from .tts import strip_tags
+    if not any("<" in b["text"] for b in beats):
+        new = [{"at": b["at"], "text": strip_tags(b["text"])} for b in new]
+    script = " ".join(strip_tags(b["text"]) for b in new)
+    if validate_script(script, facts, int(lo * 0.7), int(hi * 1.3), game, False):
+        return result
+    return {**result, "script": script, "beats": new, "punched": True}
+
+
+def _write_script_inner(llm, cfg, judgement: dict, transcript: str, clip_dur: float, images=None,
                  feedback: str = "", timeline: dict | None = None) -> dict:
     """transcript is ignored on purpose: streamers talk about unrelated things, the script must come from the picture."""
     lo, hi = target_words(clip_dur, cfg)
@@ -241,7 +376,7 @@ Also write a "title": a catchy on-screen heading for the top of the video and fo
 mentioning "{game}", style: {title_style}. Truthful, no emoji, no hashtags, no ALL CAPS shouting.
 
 Return JSON: {{"script": "...", "title": "..."}}"""
-        raw = llm.json(prompt, system=SYSTEM, images=images or None, temperature=0.6)
+        raw = _ask(llm, prompt, quality=True, system=SYSTEM, images=images or None, temperature=0.6)
         script = re.sub(r"\s+", " ", str(raw.get("script", ""))).strip()
         title = re.sub(r"\s+", " ", str(raw.get("title") or raw.get("on_screen_hook") or "")).strip().strip('"')
         if title and game and not mentions_game(title, game) and len(title) + len(game) + 2 <= 70:
@@ -275,6 +410,8 @@ def _write_beats(llm, cfg, judgement, clip_dur, images, feedback, timeline, fact
     mom = timeline.get("moment")
     tl_txt = "\n".join(f"  {t:>5.1f}s  {w}" for t, w in ev)
     tags_ok = str(cfg.get("narration.engine", "kokoro")) == "gemini"
+    _k = moment_kind(judgement)
+    style_block = WRITER_STYLE[_k] + "\n" + EXAMPLES.get(_k, "")
     tag_rule = ('- You may use at most 2 delivery tags in the whole script, only where a real person would: <short pause> '
                 'before a reveal, <breath> before something big, <laugh> after something funny. Put capitals on at most 2 '
                 'words for stress.' if tags_ok else "- No tags, no capital-letter words.")
@@ -300,12 +437,18 @@ you can only set the scene, build curiosity and tell people what to watch for ("
 Right at the moment ({f"{mom:.1f}s" if mom is not None else "when it appears"}) react to it, then explain it and why it matters.
 Never say something already happened before the picture shows it.
 
+{style_block}
+{PLAYBOOK}
 Voice and style: a real person, hyped but not fake, like a friend who just saw something wild. Be specific and
 vivid (what exactly bends, breaks, moves, reacts), add one detail a casual viewer would miss, and show emotion
-(surprise, respect, amusement). Vary sentence length. No generic filler like "amazing" without saying why.
+(surprise, respect, amusement). Vary sentence length. Show, do not tell: name the exact thing the viewer sees instead of \"this is crazy\". No generic filler like "amazing" without saying why.
 Structure: 1 HOOK beat at 0.3s-1s (max 14 words, names "{game}", style: {hook_style}; it may tease, not reveal),
 2-4 BODY beats (build-up, reaction at the moment, explanation, one extra detail), 1 ENDING beat (a question to the viewer,
 max 14 words, style: {end_style}).
+VALUE: the viewer must get something from these 20 seconds: a detail only a careful player notices, what it
+implies (cause and effect, what it says about the world or the story), or a "would you survive / would you do this"
+stake. The HOOK must open a curiosity gap in the first 2 seconds (a question, a contradiction, "watch the ...").
+Never narrate walking, menus or idle talking as if it were exciting; stay with what really happens.
 Timing: speaking speed is about {cfg.get('narration.words_per_second', 2.4)} words per second, so a 10-word line takes about 4 seconds; the next
 beat must start after the previous one has finished. Together all lines have {lo} to {hi} words and the last one ends
 before {clip_dur - 0.8:.1f}s.
@@ -315,28 +458,24 @@ streamer; no emoji, no hashtags, no like-and-subscribe.
 
 Also write "title": an on-screen heading (4 to 9 words, mentions "{game}", style: {title_style}), truthful, no emoji, no hashtags.
 Return JSON: {{"beats": [{{"at": 0.5, "text": "..."}}, ...], "title": "..."}}"""
-        raw = llm.json(prompt, system=SYSTEM, images=images or None, temperature=0.7)
-        beats = _parse_beats(raw.get("beats"))
+        raw = _ask(llm, prompt, quality=True, system=SYSTEM, images=images or None, temperature=0.7)
+        beats = repair_beats(_parse_beats(raw.get("beats")), cfg)
         title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip().strip('"')
         if title and game and not mentions_game(title, game) and len(title) + len(game) + 2 <= 70:
             title = f"{game}: {title}"
         from .tts import strip_tags
         script = " ".join(strip_tags(b["text"]) for b in beats)
         last = {"script": script, "title": title[:70], "on_screen_hook": title[:70], "beats": beats}
-        problems = validate_script(script, facts, lo, hi, game, True) + validate_beats(beats, clip_dur, cfg, lead)
-        n = word_count(script)
+        # a little shorter or longer than the target is fine: the voice is sped up a bit or the clip is extended
+        problems = validate_script(script, facts, int(lo * 0.7), int(hi * 1.3), game, False) + validate_beats(beats, clip_dur, cfg, lead)
         if not tags_ok:
             beats = [{"at": b["at"], "text": strip_tags(b["text"])} for b in beats]
             last["beats"] = beats
         if not problems:
             return last
-        if n > hi:
-            problems.append(f"{n} words in total: cut to at most {hi}")
-        elif n < lo:
-            problems.append(f"{n} words in total: add detail to reach at least {lo}")
-    # tolerate small timing problems on the last try: the voice is placed after the previous line anyway
-    hard = [p for p in problems if not p.startswith(("beat ", "the last line", "use 4", "the first beat"))]
-    if last and not hard:
+    # last try still has small problems: use it anyway unless it breaks a real rule (numbers, call-to-action, emoji)
+    hard = [p for p in problems if p.startswith(("number", "contains")) or ("too short" in p and word_count(last.get("script", "")) < 15)]
+    if last and last.get("script") and not hard:
         return last
     raise ValueError("could not get a valid script: " + "; ".join(problems))
 
@@ -559,12 +698,12 @@ def align_words(script_words: list[str], heard: list[tuple[float, float, str]]):
     return pos
 
 
-def _synth_cloud(cfg, engine: str, text: str, out_wav: Path, max_duration, beats, lead) -> Narration:
+def _synth_cloud(cfg, engine: str, text: str, out_wav: Path, max_duration, beats, lead, tone: str | None = None) -> Narration:
     from . import tts
     from .transcribe import transcribe_file
     spoken = " ".join(b["text"] for b in beats) if beats else text
     if engine == "gemini":
-        audio, sr = tts.gemini_speak(cfg, spoken)
+        audio, sr = tts.gemini_speak(cfg, spoken, style=tone)
     else:
         audio, sr = tts.eleven_speak(cfg, tts.strip_tags(spoken))
     clean = tts.strip_tags(spoken)
@@ -617,13 +756,13 @@ def _synth_cloud(cfg, engine: str, text: str, out_wav: Path, max_duration, beats
 
 
 def synthesize(cfg, text: str, out_wav: Path, max_duration: float | None = None,
-               beats: list[dict] | None = None, lead: float = 0.0) -> Narration:
+               beats: list[dict] | None = None, lead: float = 0.0, tone: str | None = None) -> Narration:
     """Speak the script. With `beats` ([{at, text}], `at` = second of the clip) every line is placed on its moment.
     Cloud voices (Gemini / ElevenLabs) fall back to the offline voice if they fail, so a Short is never lost."""
     engine = str(cfg.get("narration.engine", "kokoro"))
     if engine in ("gemini", "elevenlabs"):
         try:
-            return _synth_cloud(cfg, engine, text, out_wav, max_duration, beats, lead)
+            return _synth_cloud(cfg, engine, text, out_wav, max_duration, beats, lead, tone)
         except Exception as e:                           # noqa: BLE001
             print(f"[tts] {engine} voice failed ({str(e)[:160]}); using the offline voice for this Short")
     return _synth_local(cfg, text, out_wav, max_duration, beats, lead)

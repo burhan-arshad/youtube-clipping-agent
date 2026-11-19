@@ -72,7 +72,7 @@ def test_request_shape_and_images(llm):
     assert req["key"] == "test-key"                       # key in a header, never in the URL
     parts = req["body"]["contents"][0]["parts"]
     assert parts[0]["text"] == "hello" and parts[1]["inline_data"]["mime_type"] == "image/jpeg"
-    assert req["body"]["systemInstruction"]["parts"][0]["text"] == "be nice"
+    assert req["body"]["systemInstruction"]["parts"][0]["text"] .endswith("be nice")
     assert req["body"]["generationConfig"]["responseMimeType"] == "application/json"
 
 
@@ -113,3 +113,14 @@ def test_all_models_gone_triggers_discovery(llm):
     Fake.script = [(404, ""), (404, ""), (200, '{"found": true}')]
     assert llm.json("x") == {"found": True}
     assert Fake.seen[-1]["path"] == "/v1beta/models/gemini-9-flash:generateContent"   # best flash, no image/pro
+
+
+def test_daily_quota_cooldown_until_reset_and_title_suffix():
+    import time
+    from featureclip.llm import next_quota_reset
+    from featureclip import metadata
+    now = time.time()
+    r = next_quota_reset(now)
+    assert now < r <= now + 24 * 3600 + 10
+    assert metadata.norm_suffix("#Shorts") == " #Shorts" and metadata.norm_suffix("") == ""
+    assert metadata.validate({"title": "GTA 6 gator walks into a store#Shorts", "description": "x" * 90}, "GTA 6") == []

@@ -63,6 +63,10 @@ def extract_json(text: str) -> dict:
     raise ValueError("no JSON object found in model reply")
 
 
+from .llm_limits import limits_for  # noqa: E402
+from .quota import next_quota_reset, reset_text  # noqa: E402,F401
+
+
 class LLM:
     def __init__(self, cfg, store=None, sleep=time.sleep, now=time.time):
         self.cfg = cfg
@@ -74,7 +78,8 @@ class LLM:
         self._extra: list[str] = []            # models found by auto-discovery
         self._discovered = False
         self.provider = cfg.get("llm.provider", "gemini")
-        self.timeout = int(cfg.get("llm.timeout", 90))
+        self.timeout = int(cfg.get("llm.timeout", 60))
+        self._slow: dict[str, float] = {}          # model -> time until which it is tried last (it was too slow)
         self.gemini_base = cfg.get("llm.gemini_base_url", "https://generativelanguage.googleapis.com")
 
     # ---- availability
@@ -140,20 +145,48 @@ class LLM:
         return bool(self.key()) and bool(self.models())
 
     # ---- public
+    def ordered_models(self, quality: bool = False) -> list[str]:
+        """All models in fallback order. quality=True puts the smarter (low daily limit) models first."""
+        base = self.models()
+        now = self._now()
+        slow = [m for m in base if self._slow.get(m, 0) > now]
+        base = [m for m in base if m not in slow] + slow         # slow models only as a last resort
+        if not quality or self.provider != "gemini":
+            return base
+        q = [m for m in (self.cfg.get("llm.quality_models", []) or []) if m in base and m not in slow]
+        return q + [m for m in base if m not in q]
+
+    def _over_budget(self, model: str) -> bool:
+        """True when this app already used (almost) the whole free daily limit of the model."""
+        if not self.store:
+            return False
+        limit = (self.cfg.get("llm.daily_limit", {}) or {}).get(model)
+        if not limit:
+            lim = limits_for(model) or {}
+            rpd = lim.get("rpd")
+            limit = int(rpd * float(self.cfg.get("llm.daily_limit_margin", 0.96))) if rpd else None
+        return bool(limit) and self.store.usage_today(model) >= int(limit)
+
     def json(self, prompt: str, system: str = "", images: list[bytes] | None = None,
-             temperature: float = 0.4) -> dict:
+             temperature: float = 0.4, quality: bool = False) -> dict:
         if not self.available():
             raise LLMError("no LLM key configured (set GEMINI_API_KEY in .env)")
+        game = str(self.cfg.get("game.name", "") or "")
+        if game:
+            system = (f'FACT: the footage is from the game "{game}" (it may be newer than your knowledge). Always call it '
+                      f'exactly "{game}"; never rename it, never replace it with another game or version, and never say '
+                      f'it does not exist. ' + system)
         last_err = "unknown"
         waits = 0
         while True:
             tried_any = False
             soonest = None
-            for model in self.models():
+            for model in self.ordered_models(quality):
                 if model in self._dead:
                     continue
-                limit = (self.cfg.get("llm.daily_limit", {}) or {}).get(model)
-                if limit and self.store and self.store.usage_today(model) >= int(limit):
+                if images and model.lower().startswith("gemma"):
+                    continue                    # Gemma is used for text-only calls
+                if self._over_budget(model):
                     continue
                 cool_until = self._cool.get(model, 0)
                 try:
@@ -169,16 +202,20 @@ class LLM:
                 tried_any = True
                 for attempt in range(int(self.cfg.get("llm.max_retries", 2))):
                     try:
+                        t0 = self._now()
                         text = self._call(model, prompt, system, images, temperature)
+                        if self._now() - t0 > float(self.cfg.get("llm.slow_seconds", 40)):
+                            self._slow[model] = self._now() + 900   # works but slow: other models go first for a while
                         if self.store:
                             self.store.bump_usage(model)
                             self._log(model, True)
                         return extract_json(text)
                     except _RateLimited as e:
                         self._stat(model, "rate_limited", "HTTP 429 (daily quota used up)" if e.daily else "HTTP 429 (free-tier rate limit)")
-                        self._cool[model] = self._now() + (3600 if e.daily else 60)    # next model is tried at once
+                        until = next_quota_reset(self._now()) if e.daily else self._now() + 60
+                        self._cool[model] = until                                       # next model is tried at once
                         self._log(model, False, "429 daily quota" if e.daily else "429 rate limit")
-                        self._persist_cooldown(model, "daily quota used up" if e.daily else "rate limit (per minute)")
+                        self._persist_cooldown(model, f"daily quota used up (resets {reset_text()})" if e.daily else "rate limit (per minute)", until - self._now())
                         last_err = f"{model}: rate limited"
                         break
                     except _Dead as e:
@@ -188,12 +225,24 @@ class LLM:
                         self._dead.add(model)
                         last_err = f"{model}: {e}"
                         break
+                    except requests.Timeout:
+                        last_err = f"{model}: no answer within {self.timeout}s"
+                        self._stat(model, "errors", last_err)
+                        self._log(model, False, last_err)
+                        self._slow[model] = self._now() + 900
+                        self._cool[model] = self._now() + 120        # too slow: go to the next model at once, retry later
+                        self._persist_cooldown(model, "too slow (timeout)", 120)
+                        break
                     except (_Transient, ValueError, requests.RequestException) as e:
                         last_err = f"{model}: {type(e).__name__}: {e}"
                         self._stat(model, "errors", last_err)
                         self._log(model, False, last_err[:120])
-                        self._sleep(1.0)
-                        continue
+                        if attempt + 1 < int(self.cfg.get("llm.max_retries", 2)):
+                            self._sleep(2.0 * (attempt + 1))        # busy server: wait a little, then retry once
+                            continue
+                        self._cool[model] = self._now() + 45        # still busy: let the other models work for a while
+                        self._persist_cooldown(model, "server busy (HTTP 5xx)", 45)
+                        break
             if not self._discovered and self._dead and self.discover():
                 continue                       # new models found -> try them
             if tried_any:
@@ -216,11 +265,14 @@ class LLM:
         for img in images or []:
             parts.append({"inline_data": {"mime_type": "image/jpeg",
                                           "data": base64.b64encode(img).decode()}})
-        body: dict[str, Any] = {
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"},
-        }
-        if system:
+        gemma = model.lower().startswith("gemma")
+        if gemma and system:                    # Gemma has no separate system instruction: fold it into the prompt
+            parts[0]["text"] = system + "\n\n" + prompt + "\n\nAnswer with JSON only."
+        gen: dict[str, Any] = {"temperature": temperature}
+        if not gemma:
+            gen["responseMimeType"] = "application/json"
+        body: dict[str, Any] = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen}
+        if system and not gemma:
             body["systemInstruction"] = {"parts": [{"text": system}]}
         url = f"{self.gemini_base}/v1beta/models/{model}:generateContent"
         r = requests.post(url, json=body, timeout=self.timeout,
