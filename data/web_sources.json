@@ -138,5 +138,29 @@
   "facecam": "",
   "crop": null,
   "extra": {}
+ },
+ "web-981050eb": {
+  "id": "web-981050eb",
+  "streamer": "Ducky Bhai",
+  "url": "https://www.youtube.com/watch?v=F3O5-2fmANE",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@DuckyReloaded1",
+  "facecam": "",
+  "crop": null,
+  "extra": {}
+ },
+ "web-ba5b2467": {
+  "id": "web-ba5b2467",
+  "streamer": "I Show Speed",
+  "url": "https://www.youtube.com/watch?v=hwSg39yIBGU",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@IShowSpeed",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "mode": "streamer",
+   "clips": 5,
+   "since": 1795164671.1104605
+  }
  }
 }

@@ -13,3 +13,4 @@ __pycache__/
 .pytest_cache/
 proofs/
 cookies.txt
+token_streamer.json

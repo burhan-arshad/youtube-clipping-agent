@@ -202,7 +202,9 @@ def first_comments(cfg, store, post=None, now: float | None = None) -> int:
         if state.startswith("fail") and now - float(store.kv_get(key + ":ts", "0") or 0) < 1800:
             continue
         try:
-            (post or uploader.post_comment)(cfg, c["youtube_id"], pick_comment(cfg, c))
+            from . import channels
+            with channels.use(cfg, channels.key_of_clip(c)):
+                (post or uploader.post_comment)(cfg, c["youtube_id"], pick_comment(cfg, c))
             store.kv_set(key, "done")
             n += 1
         except Exception as e:                        # noqa: BLE001

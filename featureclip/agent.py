@@ -17,7 +17,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import metadata, schedule
+from . import channels, metadata, schedule
 from .config import load_config
 from .ffutil import grab_frame, probe
 from .llm import LLM, LLMError
@@ -54,6 +54,13 @@ If you are not sure, it is "minor". Do not invent problems.
 Return JSON only:
 {{"score": 0-100 overall quality, "issues": [{{"type": "video|script|metadata|thumbnail|policy", "severity": "blocker|minor", "text": "short, specific"}}]}}
 An empty issues list means you found nothing wrong."""
+
+
+STREAMER_NOTE = """STREAMER CLIP (this overrides the rules above): this Short intentionally shows the streamer's webcam
+in the top part and the gameplay below it, with the streamer's ORIGINAL voice and captions of what the streamer says.
+There is NO voice-over: ignore the "Voice-over" section. The person in the webcam, the streamer's name and the captions
+are NOT problems. Judge only: is something interesting, funny or surprising happening, are the title and description
+truthful for what is shown, is it a loading screen/menu/almost nothing, chat or donation alerts on the gameplay, or a policy problem."""
 
 
 def _wrong_game_claim(text: str, game: str) -> bool:
@@ -136,6 +143,9 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
         prompt = REVIEW_PROMPT.format(game=cfg.get("game.name", "the game"), title=c["title"], description=c["description"],
                                       script=script_txt, feature=j.get("feature_name", ""),
                                       timeline_block=timeline_block, times_note=times_note)
+        streamer_clip = bool(j.get("streamer_clip"))
+        if streamer_clip:
+            prompt = prompt.replace("Return JSON only:", STREAMER_NOTE + "\nReturn JSON only:", 1)
         raw = llm.json(prompt, images=imgs or None, temperature=0.1)
         try:
             score = float(raw.get("score", 0))
@@ -144,6 +154,8 @@ def review_clip(llm, cfg, c, tmp: Path, store=None) -> dict:
         game_name = str(cfg.get("game.name", "") or "")
         for it in raw.get("issues") or []:
             if isinstance(it, dict):
+                if streamer_clip and str(it.get("type", "")).lower() == "script":
+                    continue                              # no script in a streamer clip
                 if _wrong_game_claim(str(it.get("text", "")), game_name):
                     continue                              # the reviewer's knowledge predates the game: ignore it
                 t = str(it.get("type", "video")).lower()
@@ -307,7 +319,8 @@ class Assistant:
             self._event("info", f"Link is a {'LIVE stream' if kind == 'live' else 'recorded video'}: {s['url'][:70]}")
         opts = json.loads(s["options"] or "{}")
         args = dict(video=s["url"], streamer=s["streamer"] or "", credit_url=s["credit_url"] or "",
-                    facecam=opts.get("facecam", ""), crop=opts.get("crop"))
+                    facecam=opts.get("facecam", ""), crop=opts.get("crop"),
+                    mode=opts.get("mode", ""), clips=int(opts.get("clips", 0) or 0))
         if s["kind"] == "live":
             job = self.jobs.submit("watch", f"LIVE (assistant): {s['url'][:60]}", minutes=float(cfg.get("assistant.piece_minutes", 5) or 5), **args)
         else:
@@ -416,18 +429,23 @@ class Assistant:
             return
         if not store.clips(status="approved"):
             return
-        tok = Path(str(cfg.get("upload.token", "token.json")))
-        if not (tok if tok.is_absolute() else cfg.root / tok).is_file():
-            if not store.kv_get("warned_login"):
+        need = {channels.key_of_clip(c) for c in store.clips(status="approved")}
+        missing = sorted(k for k in need if not channels.logged_in(cfg, k))
+        if missing:
+            tag = ",".join(missing)
+            if store.kv_get("warned_login") != tag:
                 notifier.send("warn", "YouTube is not connected",
-                              "Open the YouTube tab, upload client_secret.json and log in. Approved clips are waiting.")
-                store.kv_set("warned_login", "1")
-            return
-        store.kv_set("warned_login", "")
+                              "Open the YouTube tab, upload client_secret.json and log in to: "
+                              + ", ".join(channels.LABELS[k] for k in missing) + ". Approved clips are waiting.")
+                store.kv_set("warned_login", tag)
+            if len(missing) == len(need):
+                return
+        else:
+            store.kv_set("warned_login", "")
         pipe.upload()
         for r in getattr(pipe, "upload_results", []):
             if r.get("limit"):
-                key = store.kv_get("upload_pause_until", "")
+                key = store.kv_get("upload_pause_until", "") + store.kv_get("upload_pause_until:streamer", "")
                 if store.kv_get("limit_notified") != key:
                     store.kv_set("limit_notified", key)
                     self._event("warn", "YouTube upload limit reached: uploads paused, clips are kept")
@@ -504,8 +522,7 @@ class Assistant:
 
     # ------------------------------------------------------------------ learn from YouTube results
     def _learn(self, cfg, store, notifier) -> None:
-        tok = Path(str(cfg.get("upload.token", "token.json")))
-        if not (tok if tok.is_absolute() else cfg.root / tok).is_file():
+        if not any(channels.logged_in(cfg, k) for k in channels.KEYS):
             return
         every = float(cfg.get("insights.refresh_hours", 3)) * 3600
         last = float(store.kv_get("stats_try_ts", "0") or 0)

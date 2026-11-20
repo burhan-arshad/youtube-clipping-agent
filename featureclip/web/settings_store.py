@@ -29,6 +29,16 @@ FIELDS: list[dict] = [
      "help": "Written as 'Channel: <name>' at the end of every description. No links."},
     {"group": "Channel branding", "key": "branding.handle", "label": "Channel handle / name on video", "type": "text",
      "help": "Shown under the heading on every Short so nobody can reuse your clips unnoticed (e.g. @DetailRadar). Leave empty to hide."},
+    {"group": "Channel branding", "key": "channels.voiceover.name", "label": "Voice-over channel name", "type": "text",
+     "help": "Name written as 'Channel: ...' in voice-over descriptions. Empty = the name above."},
+    {"group": "Channel branding", "key": "channels.streamer.name", "label": "Streamer-clips channel name", "type": "text",
+     "help": "Name written as 'Channel: ...' in streamer-clip descriptions (your second channel). Empty = the name above."},
+    {"group": "Video look", "key": "streamer.clip_min", "label": "Streamer clip: shortest (seconds)", "type": "number"},
+    {"group": "Video look", "key": "streamer.clip_max", "label": "Streamer clip: longest (seconds)", "type": "number"},
+    {"group": "AI (Gemini)", "key": "streamer.quality_floor", "label": "Streamer clips: minimum interest (0-100)", "type": "number",
+     "help": "Higher = fewer but better streamer clips. 62 is a good start."},
+    {"group": "AI (Gemini)", "key": "streamer.min_reaction", "label": "Streamer clips: minimum reaction (0-100)", "type": "number",
+     "help": "Only clips where the streamer laughs, screams or is shocked. 45 = clearly amused/surprised, 65+ = loud laughing or screaming only."},
     # ---- folders
     {"group": "Folders", "key": "paths.output", "label": "Output folder (finished clips)", "type": "folder",
      "help": "Final Shorts (mp4) are saved here"},
@@ -38,8 +48,13 @@ FIELDS: list[dict] = [
      "help": "Put licensed mp3/wav files here. If empty, the built-in royalty-free generated music is used"},
     # ---- video look
     {"group": "Video look", "key": "layout.mode", "label": "Layout", "type": "select",
-     "options": ["hybrid", "fill"],
-     "help": "hybrid = large gameplay block over a blurred background, fill = full vertical screen (narrow crop)"},
+     "options": ["hybrid", "fill", "streamer"],
+     "help": "hybrid = large gameplay block over a blurred background, fill = full vertical screen (narrow crop), "
+             "streamer = the streamer's webcam on top and the gameplay below, with the streamer's ORIGINAL voice "
+             "(no AI voice-over, no music)"},
+    {"group": "Video look", "key": "streamer.top_ratio", "label": "Streamer layout: webcam height (share of the screen)", "type": "number",
+     "help": "0.36 = webcam uses the top 36% of the vertical video, gameplay the rest (allowed 0.2-0.5)"},
+    {"group": "Video look", "key": "streamer.captions", "label": "Streamer layout: captions of the streamer's speech", "type": "bool"},
     {"group": "Video look", "key": "layout.ai", "label": "Detect webcam / chat / text overlays with AI", "type": "bool"},
     {"group": "Video look", "key": "layout.facecam", "label": "Facecam position", "type": "select",
      "options": ["auto", "top-left", "top-right", "bottom-left", "bottom-right", "none"],

@@ -307,6 +307,10 @@ function viewCreate() {
   ${!S.has_key ? `<div class="card" style="border-color:var(--bad)"><b>A Gemini API key is required first.</b>
      Open Settings and paste your key (free: aistudio.google.com/apikey).
      <div class="actions"><button class="btn primary" id="goSet">Open Settings</button></div></div>` : ""}
+  <div class="card"><h2>What should be made?</h2>
+    <div class="grid2" style="gap:10px"><div><label>Clip type (required)</label><select id="mkMode"><option value="">— choose —</option><option value="voiceover">Voice-over clips (AI script + voice)</option><option value="streamer">Streamer clips (webcam on top, own voice)</option></select></div>
+      <div><label>How many clips? (required)</label><input type="number" id="mkClips" min="1" max="50" placeholder="e.g. 5"></div></div>
+    <p class="help">Streamer clips keep the streamer's own voice and go to the streamer channel; voice-over clips go to the voice-over channel (set both in the YouTube tab).</p></div>
   <div class="grid2">
     <div class="card">
       <h2>Recorded video</h2>
@@ -343,11 +347,15 @@ function viewCreate() {
     try { const r = await api("/api/pick", {method: "POST", body: {kind: "file"}}); if (r.path) $("#video").value = r.path; }
     catch (e) { toast(e.message, "bad"); }
   };
-  const vals = () => ({video: $("#video").value, streamer: $("#streamer").value, credit_url: $("#credit").value, ...adjBody()});
+  const vals = () => ({video: $("#video").value, streamer: $("#streamer").value, credit_url: $("#credit").value, ...adjBody(),
+    mode: $("#mkMode").value, clips: +$("#mkClips").value || 0});
+  const need = () => { if (!$("#mkMode").value) { toast("Choose the clip type first: voice-over or streamer", "bad"); return false; }
+    if (!(+$("#mkClips").value > 0)) { toast("Enter how many clips you want", "bad"); return false; } return true; };
   wireAdjust(() => $("#video").value, () => $("#liveUrl").value);
-  $("#runBtn").onclick = () => startJob({kind: "run", ...vals()}, "#log", "#jobStatus", j => {
+  $("#runBtn").onclick = () => need() && startJob({kind: "run", ...vals()}, "#log", "#jobStatus", j => {
     if (j.status === "done") { toast("Clips are ready! Open the Clips tab.", "ok"); renderNav(); } });
   $("#liveBtn").onclick = async () => {
+    if (!need()) return;
     const id = await startJob({kind: "watch", ...vals(), video: $("#liveUrl").value, minutes: +$("#liveMin").value || 5},
       "#log", "#jobStatus", () => { if ($("#liveStop")) $("#liveStop").disabled = true; });
     if (id) { $("#liveStop").disabled = false; $("#liveStop").onclick = async () => { await api(`/api/jobs/${id}/stop`, {method: "POST"}); toast("Stopping; the recorded pieces will still be processed ..."); }; }
@@ -403,7 +411,7 @@ async function viewClips() {
           <div class="actions" style="margin-top:6px">
             ${c.status==='ready' ? `<button class="btn good sm" data-a="approve">Approve</button><button class="btn danger sm" data-a="reject">Reject</button>` : ""}
             ${c.status==='approved' ? `<button class="btn sm" data-a="reject">Remove approval</button>` : ""}
-            ${c.status==='ready'||c.status==='approved' ? `<button class="btn sm" data-a="publish" title="Upload this clip now with the next free publish time">⬆ Schedule now</button><button class="btn sm" data-a="review">🔎 Re-review</button>` : ""}
+            ${c.status==='ready'||c.status==='approved' ? `<button class="btn sm" data-a="publish" title="Upload this clip with the next free publish time">⬆ Schedule</button><button class="btn sm primary" data-a="publishnow" title="Upload and make it PUBLIC right now, ignoring the schedule">🚀 Upload now</button><button class="btn sm" data-a="review">🔎 Re-review</button>` : ""}
             ${['ready','approved','dropped','error','rejected'].includes(c.status) ? `<button class="btn sm" data-a="rebuild" title="New script and a fresh render">Rebuild</button>` : ""}
           </div>
         </div>
@@ -416,6 +424,7 @@ async function viewClips() {
           if (a === "approve") await api("/api/clips/approve", {method: "POST", body: {ids: [id]}});
           if (a === "reject") await api("/api/clips/reject", {method: "POST", body: {ids: [id]}});
           if (a === "rebuild") { const r = await api(`/api/clips/${id}/rebuild`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
+          if (a === "publishnow") { if (!confirm("This clip will be uploaded and go PUBLIC on YouTube right now. Continue?")) return; const r = await api(`/api/clips/${id}/publish?now=true`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
           if (a === "publish") { const r = await api(`/api/clips/${id}/publish`, {method: "POST"}); activeJob = r.id; tab = "activity"; render(); return; }
           if (a === "revoice") {
             const txt = card.querySelector("[data-script]").value;
@@ -558,16 +567,17 @@ function viewYoutube() {
       Credentials → Create OAuth client ID → type <b>Desktop app</b> → download the JSON.</div>
       <div class="actions"><input type="file" id="secretFile" accept=".json" style="display:none">
         <button class="btn sm" id="secretBtn">${S.client_secret?'Replace client_secret.json':'Choose client_secret.json'}</button></div></div></li>
-    <li class="${S.youtube_logged_in?'done':''}"><div><b>Log in</b>
-      <div class="help">A browser window opens. Choose the Google account that owns your YouTube channel and click Allow.</div>
-      <div class="actions"><button class="btn sm" id="loginBtn" ${S.client_secret?'':'disabled'}>YouTube login</button>
-      ${S.youtube_logged_in?'<button class="btn sm danger" id="logoutBtn">Logout</button>':''}</div></div></li>
+    ${Object.entries(S.channels || {}).map(([k, ch]) => `<li class="${ch.logged_in?'done':''}"><div><b>${esc(ch.label)}${ch.name ? " — " + esc(ch.name) : ""}</b>
+      <div class="help">${k === "streamer" ? "Streamer clips (webcam + the streamer's own voice) are uploaded here." : "Voice-over clips (AI script and voice) are uploaded here."}
+      Click login, then choose the Google account / channel for THIS type of clip. Approved clips waiting: ${ch.approved}.</div>
+      <div class="actions"><button class="btn sm" data-login="${k}" ${S.client_secret?'':'disabled'}>${ch.logged_in?'Log in again':'YouTube login'}</button>
+      ${ch.logged_in?`<button class="btn sm danger" data-logout="${k}">Logout</button>`:''}</div></div></li>`).join("")}
   </ol></div>
   <div class="card"><h2>Upload</h2>
     <div class="kv"><b>Approved clips</b><span>${approved}</span><b>Uploaded today</b><span>${S.uploads_today ?? 0} / ${S.max_per_day}</span>
     <b>Privacy</b><span>${esc(S.privacy)} <span class="help">(change in Settings)</span></span></div>
     <div class="actions"><button class="btn" id="dryBtn" ${approved?'':'disabled'}>Dry run (nothing is sent)</button>
-      <button class="btn primary" id="upBtn" ${approved&&S.youtube_logged_in?'':'disabled'}>⬆ Upload</button></div>
+      <button class="btn primary" id="upBtn" ${approved&&Object.values(S.channels||{}).some(c => c.logged_in)?'':'disabled'}>⬆ Upload</button></div>
     <p class="help">Scheduled uploads are sent private and YouTube publishes them at the slot time. <b>Important:</b> until your Google Cloud project passes YouTube's API audit, YouTube keeps every API upload private and ignores the schedule. The assistant tells you when that happens; you can then publish from YouTube Studio. Custom thumbnails are not accepted for Shorts, so the thumbnail is made for your records and for any normal video.</p>
     <div class="log" id="ylog" style="height:230px;margin-top:12px"><span class="t">The log will appear here.</span></div>
     <div id="ystatus" style="margin-top:8px"></div>
@@ -578,8 +588,8 @@ function viewYoutube() {
     try { await api("/api/youtube/client-secret", {method: "POST", body: {content: await f.text()}}); toast("client_secret.json saved ✔", "ok"); await refreshState(); viewYoutube(); }
     catch (err) { toast(err.message, "bad"); }
   };
-  $("#loginBtn").onclick = () => startJob({kind: "youtube_login"}, "#ylog", "#ystatus", async () => { await refreshState(); viewYoutube(); });
-  if ($("#logoutBtn")) $("#logoutBtn").onclick = async () => { await api("/api/youtube/logout", {method: "POST"}); await refreshState(); viewYoutube(); };
+  document.querySelectorAll("[data-login]").forEach(b => b.onclick = () => startJob({kind: "youtube_login", channel: b.dataset.login}, "#ylog", "#ystatus", async () => { await refreshState(); viewYoutube(); }));
+  document.querySelectorAll("[data-logout]").forEach(b => b.onclick = async () => { await api("/api/youtube/logout", {method: "POST", body: {channel: b.dataset.logout}}); await refreshState(); viewYoutube(); });
   $("#dryBtn").onclick = () => startJob({kind: "upload", dry_run: true}, "#ylog", "#ystatus");
   $("#upBtn").onclick = () => { if (confirm("The approved clips will now be uploaded to YouTube. Continue?"))
     startJob({kind: "upload", dry_run: false}, "#ylog", "#ystatus", () => { refreshState(); }); };
@@ -745,6 +755,8 @@ async function viewAssistant() {
             <div><label>Channel link (credit)</label><input type="text" id="asCredit" placeholder="https://www.youtube.com/@..."></div></div>
           <div class="grid2" style="gap:10px"><div><label>Type</label><select id="asKind"><option value="auto">auto-detect</option><option value="live">live stream</option><option value="video">recorded video</option></select></div>
             <div><label>Webcam position</label><select id="asFace">${["auto","top-left","top-right","bottom-left","bottom-right","none"].map(o => `<option>${o}</option>`).join("")}</select></div></div>
+          <div class="grid2" style="gap:10px"><div><label>Clip type (required)</label><select id="asMode"><option value="">— choose —</option><option value="voiceover">Voice-over clips (AI script + voice)</option><option value="streamer">Streamer clips (webcam on top, own voice)</option></select></div>
+            <div><label>How many clips? (required)</label><input type="number" id="asClips" min="1" max="50" placeholder="e.g. 5"></div></div>
           <div class="actions"><button class="btn primary" id="asAdd">➕ Add to queue</button></div>
           <p class="help">Links are processed one after another. Tip: use <b>New video → Layout preview</b> first if a streamer's layout is unusual.</p>
           <div id="asQueue" style="margin-top:12px">${queueHtml(a)}</div>
@@ -766,8 +778,11 @@ async function viewAssistant() {
     Object.entries(keep).forEach(([k, v]) => { const el = document.querySelector(`#asBody [data-key="${k}"]`); if (el) { if (el.type === "checkbox") el.checked = v; else el.value = v; } });
     wireQueue();
     $("#asAdd").onclick = async () => {
+      if (!$("#asMode").value) return toast("Choose the clip type first: voice-over or streamer", "bad");
+      if (!(+$("#asClips").value > 0)) return toast("Enter how many clips you want from this link", "bad");
       try {
         await api("/api/assistant/sources", {method: "POST", body: {url: $("#asUrl").value, kind: $("#asKind").value, streamer: $("#asStreamer").value,
+          mode: $("#asMode").value, clips: +$("#asClips").value,
           credit_url: $("#asCredit").value, facecam: $("#asFace").value === "auto" ? "" : $("#asFace").value}});
         toast("Added to the queue", "ok"); $("#asUrl").value = ""; draw();
       } catch (e) { toast(e.message, "bad"); }

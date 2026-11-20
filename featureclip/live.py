@@ -197,6 +197,22 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
         except Exception:
             return False
 
+    def _wanted_reached() -> bool:
+        """The owner asked for N clips from this link: stop recording once they are made."""
+        try:
+            from .pipeline import BUILT_STATES
+            src = pipe.sources.get(source_id)
+            want = int((src.extra or {}).get("clips") or 0) if src else 0
+            if not want:
+                return False
+            since = float((src.extra or {}).get("since", 0) or 0)
+            st = pipe.store
+            made = sum(1 for c in st.clips() if c["status"] in BUILT_STATES and (c["created"] or 0) >= since
+                       and st.video(c["video_id"])["source_id"] == source_id)
+            return made >= want
+        except Exception:
+            return False
+
     def drain(vid: int) -> None:
         """judge + build until nothing is left. AI limit exhausted -> wait and try again, never skip."""
         from .llm import LLMError
@@ -265,6 +281,10 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
                     break
                 continue
             process(seg)
+            if _wanted_reached():
+                log("the wanted number of clips is made: the live recording stops here")
+                stop_evt.set()
+                break
     except KeyboardInterrupt:
         log("Ctrl+C: stopping the recorder, then processing what is already recorded (Ctrl+C again = quit now)")
         stop_evt.set()

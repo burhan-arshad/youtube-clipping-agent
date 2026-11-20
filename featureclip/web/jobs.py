@@ -138,11 +138,16 @@ def parse_crop_frac(v) -> list[float] | None:
 
 
 def source_for(url_or_path: str, streamer: str = "", credit_url: str = "", facecam: str = "",
-               crop: list[float] | None = None) -> Source:
+               crop: list[float] | None = None, mode: str = "", clips: int = 0) -> Source:
     v = url_or_path.strip().strip('"')
     h = hashlib.sha1(v.encode()).hexdigest()[:8]
     fc = "" if (facecam or "auto") == "auto" else facecam
     extra = {"crop_frac": parse_crop_frac(crop)} if parse_crop_frac(crop) else {}
+    if mode in ("voiceover", "streamer"):
+        extra["mode"] = mode                          # which kind of clip (and so which YouTube channel)
+    if int(clips or 0) > 0:
+        extra["clips"] = int(clips)                   # how many clips the owner wants from this link
+        extra["since"] = time.time()
     if v.lower().startswith(("http://", "https://")):
         return Source(id=f"web-{h}", streamer=streamer, url=v, credit_url=credit_url, facecam=fc, extra=extra)
     return Source(id=f"file-{h}", streamer=streamer, path=v, credit_url=credit_url, facecam=fc, extra=extra)
@@ -241,7 +246,8 @@ class JobManager:
     # ---- job kinds
     def _do_run(self, job: Job):
         a = job.args
-        src = source_for(a["video"], a.get("streamer", ""), a.get("credit_url", ""), a.get("facecam", ""), a.get("crop"))
+        src = source_for(a["video"], a.get("streamer", ""), a.get("credit_url", ""), a.get("facecam", ""), a.get("crop"),
+                     a.get("mode", ""), a.get("clips", 0))
         cfg, store, sources, p = self._pipeline()
         sources[src.id] = src
         p.stop_event = job.stop_event
@@ -313,7 +319,8 @@ class JobManager:
     def _do_watch(self, job: Job):
         from ..live import watch
         a = job.args
-        src = source_for(a["video"], a.get("streamer", ""), a.get("credit_url", ""), a.get("facecam", ""), a.get("crop"))
+        src = source_for(a["video"], a.get("streamer", ""), a.get("credit_url", ""), a.get("facecam", ""), a.get("crop"),
+                     a.get("mode", ""), a.get("clips", 0))
         cfg, store, sources, p = self._pipeline()
         sources[src.id] = src
         remember_source(self.root, src)
@@ -327,12 +334,17 @@ class JobManager:
 
     def _do_upload(self, job: Job):
         cfg, store, sources, p = self._pipeline()
-        n = p.upload(limit=job.args.get("limit"), dry_run=bool(job.args.get("dry_run")), only=job.args.get("only"))
+        n = p.upload(limit=job.args.get("limit"), dry_run=bool(job.args.get("dry_run")), only=job.args.get("only"),
+                     public_now=bool(job.args.get("public_now")))
         job.result = {"uploaded": n}
 
     def _do_youtube_login(self, job: Job):
         from .. import uploader
         cfg = load_config(self.config_path, root=self.root)
-        job.say("A browser window will open: choose the Google account that owns your YouTube channel and click Allow ...")
-        uploader.get_credentials(cfg)
+        from .. import channels
+        key = job.args.get("channel") or "voiceover"
+        job.say(f"{channels.LABELS.get(key, key)}: a browser window will open. Choose the Google account that owns THAT "
+                "YouTube channel (if it is a brand channel, pick the channel on the next screen) and click Allow ...")
+        with channels.use(cfg, key):
+            uploader.get_credentials(cfg)
         job.say("YouTube login complete.")

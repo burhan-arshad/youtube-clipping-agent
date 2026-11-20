@@ -21,9 +21,13 @@ def channel_name(cfg) -> str:
 def credit_lines(cfg, streamer: str = "") -> list[str]:
     """Footer of the description: names only, never links (links in Shorts descriptions are not wanted)."""
     lines = []
-    if streamer:
-        lines.append(f"Footage from {streamer}'s stream.")
-    lines.append("Voice-over: AI-generated.")
+    if cfg.get("layout.mode") == "streamer":
+        who = streamer or "the streamer"
+        lines.append(f"Clip from {who}'s stream. All credit to {who}: original footage and voice.")
+    else:
+        if streamer:
+            lines.append(f"Footage from {streamer}'s stream.")
+        lines.append("Voice-over: AI-generated.")
     foot = str(cfg.get("upload.description_footer", "") or "").strip()
     if foot:
         lines.append(foot)
@@ -131,7 +135,10 @@ def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: 
     if not llm or not llm.available():
         return fb
     facts = (f"Feature: {judgement.get('feature_name', '')}\nWhat happens: {judgement.get('what_happens', '')}\n"
-             f"Visible evidence: {'; '.join(judgement.get('visible_evidence', []) or [])}\nVoice-over: {script}")
+             f"Visible evidence: {'; '.join(judgement.get('visible_evidence', []) or [])}\n"
+             + (f"What the streamer says in the clip (their own voice): {script}\nThis Short is an original clip from "
+                f"{streamer or 'the streamer'}'s stream, not a voice-over: describe the moment (funny / chaos / feature / bug)."
+                if cfg.get("layout.mode") == "streamer" else f"Voice-over: {script}"))
     prompt = f"""You write YouTube Shorts metadata for a {game} channel that explains small game details.
 {PLAYBOOK}
 

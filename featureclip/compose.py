@@ -102,3 +102,66 @@ def render(video: str | Path, start: float, dur: float, crop: Box, narration_wav
     ]
     run(cmd, cwd=work)
     return out_path
+
+
+# ------------------------------------------------------------------ streamer layout: webcam on top, gameplay below
+
+def streamer_sizes(width: int, height: int, top_ratio: float) -> tuple[int, int]:
+    """(height of the webcam zone, height of the gameplay zone); both even, together = height."""
+    th = int(height * min(max(top_ratio, 0.2), 0.5)) // 2 * 2
+    return th, height - th
+
+
+def streamer_filter(cam: Box, crop: Box, width: int, height: int, fps: int, top_ratio: float,
+                    ass_name: str | None) -> str:
+    th, gz = streamer_sizes(width, height, top_ratio)
+    cx, cy, cw, ch = (int(v) // 2 * 2 for v in cam)
+    gx, gy, gw, gh = (int(v) // 2 * 2 for v in crop)
+    bh = min(int(width * gh / gw), gz) // 2 * 2               # the gameplay block, never taller than its zone
+    blur = "boxblur=26:3,eq=brightness=-0.18"
+    graph = (
+        f"[0:v]split=2[s1][s2];"
+        f"[s1]crop={cw}:{ch}:{cx}:{cy},setsar=1,split[c1][c2];"
+        f"[c1]scale={width}:{th}:force_original_aspect_ratio=increase,crop={width}:{th},{blur}[cbg];"
+        f"[c2]scale={width}:{th}:force_original_aspect_ratio=decrease:flags=lanczos[cfg];"
+        f"[cbg][cfg]overlay=(W-w)/2:(H-h)/2[top];"
+        f"[s2]crop={gw}:{gh}:{gx}:{gy},setsar=1,split[g1][g2];"
+        f"[g1]scale={width}:{gz}:force_original_aspect_ratio=increase,crop={width}:{gz},{blur}[gbg];"
+        f"[g2]scale={width}:{bh}:flags=lanczos[gfg];"
+        f"[gbg][gfg]overlay=0:(H-h)/2[bot];"
+        f"[top][bot]vstack=inputs=2,fps={fps}"
+    )
+    if ass_name:
+        graph += f",ass={ass_name}"
+    return graph + "[v]"
+
+
+def streamer_audio(cfg, dur: float, has_audio: bool) -> str:
+    """The streamer's own voice and the game sound, exactly as recorded (only loudness is levelled)."""
+    lufs = float(cfg.get("audio.target_lufs", -14))
+    if has_audio:
+        return (f"[0:a]aresample=48000,atrim=0:{dur:.3f},afade=t=in:st=0:d=0.12,"
+                f"afade=t=out:st={max(0.0, dur - 0.25):.3f}:d=0.25,loudnorm=I={lufs}:TP=-1.5:LRA=11[a]")
+    return f"anullsrc=r=48000:cl=stereo,atrim=0:{dur:.3f}[a]"
+
+
+def render_streamer(video: str | Path, start: float, dur: float, cam: Box, crop: Box, ass_path: Path | None,
+                    out_path: Path, cfg, has_audio: bool = True) -> Path:
+    out_path = Path(out_path)
+    work = ass_path.parent if ass_path else out_path.parent
+    width, height = int(cfg.get("video.width")), int(cfg.get("video.height"))
+    vf = streamer_filter(cam, crop, width, height, int(cfg.get("video.fps")),
+                         float(cfg.get("streamer.top_ratio", 0.36)), ass_path.name if ass_path else None)
+    af = streamer_audio(cfg, dur, has_audio)
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(video).resolve()),
+        "-filter_complex", f"{vf};{af}",
+        "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}",
+        "-c:v", "libx264", "-preset", cfg.get("video.preset", "veryfast"),
+        "-crf", str(cfg.get("video.crf", 21)), "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+        "-movflags", "+faststart", str(out_path.resolve()),
+    ]
+    run(cmd, cwd=work)
+    return out_path

@@ -63,6 +63,10 @@ def mark_used(store, idx: int) -> None:
         store.kv_set("launch", json.dumps(d))
 
 
+from .channels import key_of_clip  # noqa: E402
+from .safe import _set  # noqa: E402
+
+
 def reschedule_existing(cfg, store, setter=None, now: float | None = None) -> dict:
     """Move already scheduled (not yet public) uploads: the first ones into the launch times, the rest into the
     normal slots. Returns {moved, failed}."""
@@ -73,7 +77,8 @@ def reschedule_existing(cfg, store, setter=None, now: float | None = None) -> di
     setter = setter or uploader.set_visibility
     held = json.loads(store.kv_get("safe_held", "[]") or "[]")
     todo = sorted((c for c in store.clips(status="uploaded")
-                   if c["youtube_id"] and c["scheduled_at"] and c["scheduled_at"] > now and c["id"] not in held),
+                   if c["youtube_id"] and c["scheduled_at"] and c["scheduled_at"] > now and c["id"] not in held
+                   and key_of_clip(c) == "voiceover"),
                   key=lambda c: c["scheduled_at"])
     slots = schedule.parse_slots(cfg.get("schedule.slots", schedule.DEFAULT_SLOTS)) or schedule.parse_slots(schedule.DEFAULT_SLOTS)
     nowdt = datetime.fromtimestamp(now, timezone.utc)
@@ -83,14 +88,14 @@ def reschedule_existing(cfg, store, setter=None, now: float | None = None) -> di
         nxt = next_time(store, now)
         try:
             if nxt is not None and nxt[1] is None:                 # launch slot 0: public right away
-                setter(cfg, c["youtube_id"], None, True)
+                _set(setter, cfg, c, None, True)
                 store.update_clip(c["id"], scheduled_at=now, publish_state="public now (launch)")
                 mark_used(store, nxt[0])
             else:
                 when = nxt[1] if nxt is not None else (schedule.next_slots(nowdt, 1, slots, taken) or [None])[0]
                 if when is None:
                     continue
-                setter(cfg, c["youtube_id"], schedule.iso_utc(when))
+                _set(setter, cfg, c, schedule.iso_utc(when))
                 store.update_clip(c["id"], scheduled_at=when.timestamp(), publish_state=f"scheduled {schedule.fmt_pkt(when)}")
                 taken.append(when)
                 if nxt is not None:

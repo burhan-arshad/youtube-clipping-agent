@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,7 @@ DEFAULTS: dict[str, Any] = {
     "layout": {
         # fill  = gameplay fills the whole 9:16 screen (streamer, facecam, overlays cropped away)
         # hybrid = 4:5 gameplay block over a blurred copy of itself (more of the scene visible)
+        # streamer = webcam on top, gameplay below, original voice (no AI voice-over / music)
         "mode": "fill",
         "sample_frames": 24,
         "face_detect": True,
@@ -196,6 +199,13 @@ DEFAULTS: dict[str, Any] = {
         "manage_videos": False,           # True = lets safe mode pull scheduled videos back to private (sign in again)
     },
     "insights": {"min_samples": 3, "min_age_hours": 12, "refresh_hours": 3},
+    "streamer": {                    # layout.mode "streamer": webcam on top, gameplay below, the streamer's own voice
+        "top_ratio": 0.36, "game_aspect": 1.2, "captions": True,
+        "clip_min": 20, "clip_max": 45,   # streamer clips: long enough for set-up + reaction
+        "quality_floor": 62, "min_reaction": 45,              # stricter than voice-over clips: the streamer's own voice must carry the clip
+    },
+    # one YouTube login per kind of clip: voice-over clips use upload.token, streamer clips their own channel
+    "channels": {"streamer": {"token": "token_streamer.json", "name": ""}, "voiceover": {"name": ""}},
     "learn": {"use_playbook": True},      # the script/title writers get the channel playbook learned from YouTube results
     "cleanup": {
         "enabled": True,
@@ -233,15 +243,34 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
+_tl = threading.local()
+
+
 class Config:
     def __init__(self, data: dict, root: Path):
         self.data = data
         self.root = root
 
+    @contextlib.contextmanager
+    def use(self, overrides: dict):
+        """Temporarily override settings (dotted keys) for THIS thread only: one source can run in streamer
+        mode while another thread works in voice-over mode."""
+        stack = getattr(_tl, "stack", None)
+        if stack is None:
+            stack = _tl.stack = []
+        stack.append(dict(overrides))
+        try:
+            yield self
+        finally:
+            stack.pop()
+
     def __getitem__(self, key: str):
         return self.data[key]
 
     def get(self, dotted: str, default=None):
+        for ov in reversed(getattr(_tl, "stack", None) or []):
+            if dotted in ov:
+                return ov[dotted]
         cur: Any = self.data
         for part in dotted.split("."):
             if not isinstance(cur, dict) or part not in cur:

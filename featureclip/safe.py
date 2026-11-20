@@ -36,6 +36,13 @@ def turn_off(store) -> None:
     store.kv_set("reject_streak", "0")
 
 
+def _set(setter, cfg, clip, *args):
+    """set_visibility with the login of the channel the clip lives on."""
+    from . import channels
+    with channels.use(cfg, channels.key_of_clip(clip)):
+        return setter(cfg, clip["youtube_id"], *args)
+
+
 def pull_back(cfg, store, setter=None) -> dict:
     """Make every not-yet-public scheduled video plain private. Returns {pulled, failed}."""
     if not cfg.get("upload.manage_videos", False) and setter is None:
@@ -48,7 +55,7 @@ def pull_back(cfg, store, setter=None) -> dict:
     for c in store.clips(status="uploaded"):
         if c["youtube_id"] and c["scheduled_at"] and c["scheduled_at"] > now and c["id"] not in held:
             try:
-                setter(cfg, c["youtube_id"], None)
+                _set(setter, cfg, c, None)
                 held.append(c["id"])
                 store.update_clip(c["id"], publish_state="held private (safe mode)")
                 pulled += 1
@@ -74,7 +81,7 @@ def release(cfg, store, setter=None) -> dict:
             keep.append(cid)
             continue
         try:
-            setter(cfg, c["youtube_id"], schedule.iso_utc(nxt[0]))
+            _set(setter, cfg, c, schedule.iso_utc(nxt[0]))
             taken.append(nxt[0])
             store.update_clip(cid, scheduled_at=nxt[0].timestamp(), publish_state=f"scheduled {schedule.fmt_pkt(nxt[0])}")
             done += 1
