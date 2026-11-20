@@ -1,4 +1,4 @@
-# featureclip
+# youtube-clipping-agent
 
 **Free, CPU-only tool that turns gaming streams into YouTube Shorts and publishes them for you.**
 It watches live streams or recorded videos, finds the moments worth clipping, builds vertical 9:16 Shorts,

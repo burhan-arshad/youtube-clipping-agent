@@ -140,7 +140,13 @@ def streamer_audio(cfg, dur: float, has_audio: bool) -> str:
     """The streamer's own voice and the game sound, exactly as recorded (only loudness is levelled)."""
     lufs = float(cfg.get("audio.target_lufs", -14))
     if has_audio:
-        return (f"[0:a]aresample=48000,atrim=0:{dur:.3f},afade=t=in:st=0:d=0.12,"
+        delay = float(cfg.get("streamer.audio_delay", 0) or 0)     # manual sync fix: > 0 = voice later, < 0 = voice earlier
+        shift = ""
+        if delay > 0:
+            shift = f"adelay={int(round(delay * 1000))}:all=1,"
+        elif delay < 0:
+            shift = f"atrim=start={-delay:.3f},asetpts=PTS-STARTPTS,"
+        return (f"[0:a]aresample=48000,{shift}atrim=0:{dur:.3f},afade=t=in:st=0:d=0.12,"
                 f"afade=t=out:st={max(0.0, dur - 0.25):.3f}:d=0.25,loudnorm=I={lufs}:TP=-1.5:LRA=11[a]")
     return f"anullsrc=r=48000:cl=stereo,atrim=0:{dur:.3f}[a]"
 

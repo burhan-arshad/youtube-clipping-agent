@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from .ffutil import av_start_offset
 from .pipeline import log
 from .sources import resolve_source
 
@@ -136,6 +137,7 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
                 if rec is None:
                     try:
                         inputs = [local_test_file] if local_test_file else stream_urls(url, max_height, pipe.cfg)
+                        log(f"recording from {len(inputs)} input(s)" + (" (video and audio come separately: they can drift apart)" if len(inputs) > 1 else " (one muxed stream)"))
                         rec = start_recorder(inputs, out_dir, segment_seconds, run)
                         state["recorder"] = rec
                         run += 1
@@ -264,6 +266,10 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
             mp4 = seg.with_suffix(".mp4")      # clean timestamps so seeking works everywhere
             r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(seg), "-c", "copy",
                                 "-movflags", "+faststart", str(mp4)])
+            off = av_start_offset(mp4 if mp4.is_file() else seg)
+            if off is not None and abs(off) > 0.3:
+                log(f"  note: audio starts {off:+.2f}s from the video in this piece; if streamer clips sound out of sync, set "
+                    f"Settings > Video look > voice delay")
             vid = pipe.scan(source_id, path=mp4 if r.returncode == 0 and mp4.is_file() else seg)
             drain(vid)
         except Exception as e:           # one bad piece must not stop the live run

@@ -54,6 +54,9 @@ FIELDS: list[dict] = [
              "(no AI voice-over, no music)"},
     {"group": "Video look", "key": "streamer.top_ratio", "label": "Streamer layout: webcam height (share of the screen)", "type": "number",
      "help": "0.36 = webcam uses the top 36% of the vertical video, gameplay the rest (allowed 0.2-0.5)"},
+    {"group": "Video look", "key": "streamer.audio_delay", "label": "Streamer layout: voice delay (seconds)", "type": "number",
+     "help": "Fixes a voice that is out of sync. Voice comes BEFORE the picture -> use a positive number (try 0.5). "
+             "Voice comes AFTER the picture -> use a negative number (try -0.5). Change in small steps and rebuild one clip."},
     {"group": "Video look", "key": "streamer.captions", "label": "Streamer layout: captions of the streamer's speech", "type": "bool"},
     {"group": "Video look", "key": "layout.ai", "label": "Detect webcam / chat / text overlays with AI", "type": "bool"},
     {"group": "Video look", "key": "layout.facecam", "label": "Facecam position", "type": "select",

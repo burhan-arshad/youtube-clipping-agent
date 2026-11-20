@@ -50,7 +50,7 @@ def build_title(hook: str, feature: str, suffix: str) -> str:
 def build_description(judgement: dict, streamer: str, credit_url: str, cfg) -> str:
     """Plain-builder description (used when the AI cannot write one). Names only, no links."""
     from .metadata import credit_lines
-    lines = [judgement.get("what_happens", "").strip(), ""] + credit_lines(cfg, streamer)
+    lines = [judgement.get("what_happens", "").strip(), ""] + credit_lines(cfg, streamer, judgement.get("streamer_clip"))
     lines += ["", "#Shorts #" + re.sub(r"[^A-Za-z0-9]", "", cfg.get("game.name", "gaming"))]
     return "\n".join(lines).strip()[:4900]
 

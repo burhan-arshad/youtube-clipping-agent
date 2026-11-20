@@ -51,6 +51,17 @@ def probe(path: str | Path) -> dict:
     }
 
 
+def av_start_offset(path: str | Path) -> float | None:
+    """audio start_time minus video start_time in seconds (None if unknown). A big value means the recording itself is out of sync."""
+    try:
+        p = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_entries", "stream=codec_type,start_time", str(path)])
+        st = {s["codec_type"]: float(s["start_time"]) for s in json.loads(p.stdout.decode("utf-8", "replace")).get("streams", [])
+              if s.get("codec_type") in ("video", "audio") and s.get("start_time") not in (None, "N/A")}
+        return st["audio"] - st["video"] if "audio" in st and "video" in st else None
+    except Exception:
+        return None
+
+
 def extract_audio_wav(src: str | Path, dst: str | Path, start: float | None = None,
                       dur: float | None = None, sr: int = 16000) -> Path:
     cmd = ["ffmpeg", "-y", "-v", "error"]

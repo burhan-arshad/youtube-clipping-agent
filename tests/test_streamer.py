@@ -185,3 +185,52 @@ def test_streamer_judge_sees_face_closeups(cfg, test_video, tmp_path):
     j = judge.judge_window(L(), cfg, str(test_video), 5, 35, "oh my god!", 60.0, tmp_path, None, (440, 0, 200, 150))
     assert j["accept"], j["decision_reason"]
     assert seen["n"] == int(cfg.get("llm.frames", 4)) + 2 and "close-ups of the streamer's face" in seen["prompt"]
+
+
+def test_streamer_metadata_is_about_the_reaction(cfg):
+    cfg.data["game"]["name"] = "GTA 6"
+    seen = {}
+    class L:
+        def available(self): return True
+        def json(self, prompt, **k):
+            seen["p"] = prompt
+            return {"title": "Ducky Bhai Screams When the Car Flips in GTA 6", "thumb_text": "HE LOST IT",
+                    "description": "Ducky Bhai screams as his car flips.\n\nHe was sure he would make the jump.\n\nWould you scream too?\n\n#GTA6 #Shorts",
+                    "tags": ["ducky bhai", "gta 6"]}
+    j = {"streamer_clip": True, "feature_name": "scream", "what_happens": "car flips", "visible_evidence": ["a"]}
+    m = metadata.generate(L(), cfg, j, "oh no no no", "x", "Ducky Bhai")
+    assert "REACTION clips" in seen["p"] and "not about the game" in seen["p"]
+    assert m["title"].startswith("Ducky Bhai") and "All credit to Ducky Bhai" in m["description"]
+    assert "http" not in m["description"]
+    j2 = {"streamer_clip": True, "feature_name": "screams at the crash", "what_happens": "x"}
+    assert metadata.generate(None, cfg, j2, "", "x", "Ducky Bhai")["title"].startswith("Ducky Bhai")
+
+
+def _beep_video(path, secs=12):
+    import subprocess
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"color=c=black:s=640x360:r=30:d={secs}",
+                    "-f", "lavfi", "-i", f"sine=f=1000:d={secs}:r=48000,volume='if(lt(mod(t,4),0.2),1,0)':eval=frame",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path)], check=True)
+
+
+def _first_beep(path, tmp_path):
+    import subprocess, wave
+    import numpy as np
+    wav = tmp_path / "x.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "16000", str(wav)], check=True)
+    w = wave.open(str(wav))
+    x = np.abs(np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(float))
+    return float(np.argmax(x > x.max() * 0.3)) / 16000
+
+
+def test_streamer_voice_delay_setting(cfg, tmp_path):
+    src = tmp_path / "beep.mp4"
+    _beep_video(src)
+    cams = ((440, 0, 200, 150), (0, 0, 640, 360))
+    base = compose.render_streamer(str(src), 3.5, 6.0, *cams, None, tmp_path / "a.mp4", cfg, True)   # beep at 4.0 -> 0.5 s
+    cfg.data["streamer"]["audio_delay"] = 0.4
+    later = compose.render_streamer(str(src), 3.5, 6.0, *cams, None, tmp_path / "b.mp4", cfg, True)
+    cfg.data["streamer"]["audio_delay"] = -0.3
+    earlier = compose.render_streamer(str(src), 3.5, 6.0, *cams, None, tmp_path / "c.mp4", cfg, True)
+    t0, t1, t2 = (_first_beep(p, tmp_path) for p in (base, later, earlier))
+    assert abs((t1 - t0) - 0.4) < 0.06 and abs((t0 - t2) - 0.3) < 0.06
