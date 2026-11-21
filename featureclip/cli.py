@@ -11,17 +11,15 @@ from pathlib import Path
 from .config import load_config
 from .ffutil import have, run
 from .pipeline import Pipeline, log
-from .sources import load_sources
 from .store import Store
 
-ROOT_FILES = ["config.example.yaml", "sources.example.yaml", ".env.example"]
+ROOT_FILES = ["config.example.yaml", ".env.example"]
 
 
 def _setup(args):
     cfg = load_config(args.config, root=args.root)
     store = Store(cfg.path("paths.db"))
-    sources = load_sources(cfg.root / "sources.yaml")
-    return cfg, store, sources, Pipeline(cfg, store, sources)
+    return cfg, store, {}, Pipeline(cfg, store, {})
 
 
 def cmd_init(args) -> int:
@@ -33,7 +31,7 @@ def cmd_init(args) -> int:
         if src.is_file() and not dst.exists():
             shutil.copy(src, dst)
             print(f"created {dst}")
-    print("Next: edit .env (GEMINI_API_KEY) and sources.yaml, then: python -m featureclip doctor")
+    print("Next: edit .env (GEMINI_API_KEY), then: python -m featureclip doctor")
     return 0
 
 
@@ -71,10 +69,6 @@ def cmd_doctor(args) -> int:
     sec = cfg.root / cfg.get("upload.client_secret")
     print(("  OK   " if sec.is_file() else "  INFO ") + f"YouTube client secret ({sec.name})" +
           ("" if sec.is_file() else " - only needed for upload"))
-    sources = load_sources(cfg.root / "sources.yaml")
-    print(f"Sources: {len(sources)}")
-    for s in sources.values():
-        print(f"  OK   {s.id} ({s.streamer or '-'})")
     if args.ping:
         from .llm import LLM
         try:
@@ -261,7 +255,7 @@ def cmd_layout(args) -> int:
     cv2.imwrite(str(out), img)
     print(f"gameplay area (green): {L.rect}  facecam avoid (red): {L.avoid or 'none'}  "
           f"crop (yellow): {crop}\nsaved {out}\n"
-          "If the green box is wrong, set crop: [x, y, w, h] for that source in sources.yaml.")
+          "If the green box is wrong, set crop: [x, y, w, h] when you add the link.")
     return 0
 
 
@@ -307,6 +301,22 @@ def cmd_ui(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    from . import backup
+    cfg = load_config(args.config, root=args.root)
+    f = backup.run(cfg)
+    print(f"backup saved: {f}")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from . import backup
+    cfg = load_config(args.config, root=args.root)
+    done = backup.restore(cfg, args.file)
+    print("restored:\n  " + "\n  ".join(done) + "\n(start the program again)")
+    return 0
+
+
 def cmd_upload(args) -> int:
     *_, p = _setup(args)
     p.upload(limit=args.limit, dry_run=args.dry_run)
@@ -324,13 +334,35 @@ def cmd_daily(args) -> int:
     return 0
 
 
+TIDY = ["start_ui.bat", "layout.png", "sources.example.yaml", "docs/outreach_message.md", "streamer_channel_kit.zip",
+        ".pytest_cache"]
+
+
+def cmd_tidy(args) -> int:
+    """List (or with --yes delete) files the program does not need: old helpers, caches, leftover update zips."""
+    root = Path(args.root).resolve()
+    found = [root / n for n in TIDY if (root / n).exists()]
+    found += [p for p in root.glob("update*.zip")]
+    found += [p for p in root.rglob("__pycache__") if ".venv" not in p.parts and "node_modules" not in p.parts]
+    if not found:
+        print("Nothing to tidy.")
+        return 0
+    for p in found:
+        print(("delete " if args.yes else "would delete ") + str(p.relative_to(root)))
+        if args.yes:
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+    if not args.yes:
+        print("\nNothing was deleted. Run again with --yes to delete these.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="featureclip", description=__doc__)
     ap.add_argument("--config", default=None)
-    ap.add_argument("--root", default=".", help="project folder holding config.yaml / sources.yaml / .env")
+    ap.add_argument("--root", default=".", help="project folder holding config.yaml / .env")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("init", help="create config.yaml, sources.yaml, .env from the examples").set_defaults(fn=cmd_init)
+    sub.add_parser("init", help="create config.yaml, .env from the examples").set_defaults(fn=cmd_init)
     d = sub.add_parser("doctor", help="check that everything is installed")
     d.add_argument("--ping", action="store_true", help="make one tiny LLM call")
     d.add_argument("--whisper", action="store_true", help="try loading the Whisper model")
@@ -352,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
                    ).set_defaults(fn=cmd_selftest)
     w = sub.add_parser("watch", help="LIVE: record a live stream in pieces and clip each finished piece")
     w.add_argument("source")
-    w.add_argument("--url", default=None, help="live URL (default: url of the source in sources.yaml)")
+    w.add_argument("--url", default=None, help="live URL (the stream link)")
     w.add_argument("--minutes", type=float, default=10, help="length of each recorded piece")
     w.add_argument("--wait-minutes", type=int, default=180, help="keep retrying this long if not live yet")
     w.add_argument("--test-file", default=None, help="simulate a live stream from a local video file")
@@ -377,6 +409,14 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--port", type=int, default=8765)
     ui.add_argument("--no-browser", action="store_true")
     ui.set_defaults(fn=cmd_ui)
+    bk = sub.add_parser("backup", help="save database + settings into data/backups now")
+    bk.set_defaults(fn=cmd_backup)
+    ty = sub.add_parser("tidy", help="list unneeded files (add --yes to delete them)")
+    ty.add_argument("--yes", action="store_true")
+    ty.set_defaults(fn=cmd_tidy)
+    rs = sub.add_parser("restore", help="put a backup zip back (close the program first)")
+    rs.add_argument("file")
+    rs.set_defaults(fn=cmd_restore)
     rj = sub.add_parser("rejudge", help="judge + build a scanned video again with the newest rules")
     rj.add_argument("video_id", type=int)
     rj.set_defaults(fn=cmd_rejudge)

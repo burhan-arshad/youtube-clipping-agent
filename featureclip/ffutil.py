@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 import subprocess
 from pathlib import Path
 
@@ -16,15 +17,42 @@ def have(tool: str) -> bool:
     return shutil.which(tool) is not None
 
 
+class Stopped(RuntimeError):
+    """The owner pressed Stop: the running job is cancelled at the next step."""
+
+
+_stop = threading.local()
+
+
+def set_stop(ev) -> None:
+    """Called by the job runner: the Stop button of the job sets this event."""
+    _stop.ev = ev
+
+
+def check_stop() -> None:
+    ev = getattr(_stop, "ev", None)
+    if ev is not None and ev.is_set():
+        raise Stopped("stopped by you")
+
+
 def run(cmd: list[str], cwd: str | Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        cmd, cwd=str(cwd) if cwd else None,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if check and proc.returncode != 0:
-        tail = proc.stderr.decode("utf-8", "replace")[-1500:]
-        raise FFError(f"command failed ({proc.returncode}): {' '.join(cmd[:6])} ...\n{tail}")
-    return proc
+    check_stop()
+    proc = subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ev = getattr(_stop, "ev", None)
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if ev is not None and ev.is_set():          # Stop pressed: kill the running ffmpeg at once
+                proc.kill()
+                proc.communicate()
+                raise Stopped("stopped by you")
+    done = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    if check and done.returncode != 0:
+        tail = err.decode("utf-8", "replace")[-1500:]
+        raise FFError(f"command failed ({done.returncode}): {' '.join(cmd[:6])} ...\n{tail}")
+    return done
 
 
 def probe(path: str | Path) -> dict:

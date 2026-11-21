@@ -21,8 +21,6 @@ ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
 # Needed to change a video's visibility/schedule after upload (safe mode "pull back").
 # youtube.upload alone cannot do videos.update; "youtube" covers it. Added only when upload.manage_videos is on.
 MANAGE_SCOPE = "https://www.googleapis.com/auth/youtube"
-# Needed to post the first comment (upload.first_comment). Added only when that option is on.
-COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 
 
 def scopes_for(cfg) -> list[str]:
@@ -31,8 +29,6 @@ def scopes_for(cfg) -> list[str]:
         sc.append(ANALYTICS_SCOPE)
     if cfg.get("upload.manage_videos", False):
         sc.append(MANAGE_SCOPE)
-    if cfg.get("upload.first_comment", False):
-        sc.append(COMMENT_SCOPE)
     return sc
 
 

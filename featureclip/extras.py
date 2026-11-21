@@ -1,5 +1,4 @@
-"""Small helpers that keep the channel running smoothly: self-test, plain-language error messages,
-first comment after a video goes public, weekly report."""
+"""Small helpers: the self-test (Health check) and plain-language error messages."""
 from __future__ import annotations
 
 import importlib
@@ -144,7 +143,7 @@ def selftest(cfg, store, root: Path | None = None, online: bool = False) -> list
         _chk(out, "YouTube login", "bad", "not signed in", "YouTube tab: client_secret.json upload karein aur sign in karein"
              if not sec.is_file() else "YouTube tab mein sign in karein")
     # 10. alerts
-    chans = [n for n, k in (("ntfy", "notify.ntfy_topic"), ("Discord", "notify.discord_webhook"), ("Gmail", "notify.email_to")) if cfg.get(k)]
+    chans = [n for n, k in (("ntfy", "notify.ntfy_topic"), ("Gmail", "notify.email_to")) if cfg.get(k)]
     _chk(out, "Phone alerts", "ok" if chans else "warn", ", ".join(chans) or "none", "Settings > Notifications (ntfy/Discord/Gmail)" if not chans else "")
     # 11. quick logic checks of the rules that broke before
     try:
@@ -155,109 +154,3 @@ def selftest(cfg, store, root: Path | None = None, online: bool = False) -> list
     except Exception as e:                            # noqa: BLE001
         _chk(out, "Title rules", "bad", str(e)[:150])
     return out
-
-
-def run_startup_check(cfg, store) -> dict:
-    """Quick (offline) self-test after every program start; the result is shown as a banner if something is wrong."""
-    res = selftest(cfg, store, online=False)
-    summary = {"ts": time.time(), "bad": [c for c in res if c["level"] == "bad"], "warn": [c for c in res if c["level"] == "warn"]}
-    try:
-        store.kv_set("startup_check", json.dumps(summary))
-    except Exception:
-        pass
-    return summary
-
-
-# ------------------------------------------------------------------ first comment (#15)
-def pick_comment(cfg, clip) -> str:
-    """The closing question of the voice-over works best as the first comment; otherwise the configured text."""
-    script = str(clip["script"] or "")
-    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
-    q = next((s for s in reversed(sents) if s.endswith("?")), "")
-    q = re.sub(r"<[^>]+>", "", q)
-    if 12 <= len(q) <= 200:
-        return q
-    return str(cfg.get("upload.first_comment_text", "What do you think? Tell me in the comments!"))
-
-
-def first_comments(cfg, store, post=None, now: float | None = None) -> int:
-    """Posts the first comment on every video that has just become public (needs upload.first_comment: true and the
-    'comment' YouTube permission). YouTube's API cannot PIN a comment, so pin it yourself in YouTube Studio if you want.
-    Returns the number posted; every failure is non-fatal and is tried at most 3 times."""
-    if not cfg.get("upload.first_comment", False):
-        return 0
-    from . import uploader
-    now = now if now is not None else time.time()
-    n = 0
-    for c in store.clips(status="uploaded"):
-        if not c["youtube_id"]:
-            continue
-        pub = c["scheduled_at"] or c["updated"]
-        if not pub or pub > now or now - pub > 3 * 86400:
-            continue
-        key = f"fc:{c['id']}"
-        state = store.kv_get(key, "")
-        if state == "done" or (state.startswith("fail") and int(state[4:] or 0) >= 3):
-            continue
-        if state.startswith("fail") and now - float(store.kv_get(key + ":ts", "0") or 0) < 1800:
-            continue
-        try:
-            from . import channels
-            with channels.use(cfg, channels.key_of_clip(c)):
-                (post or uploader.post_comment)(cfg, c["youtube_id"], pick_comment(cfg, c))
-            store.kv_set(key, "done")
-            n += 1
-        except Exception as e:                        # noqa: BLE001
-            tries = int(state[4:] or 0) + 1 if state.startswith("fail") else 1
-            store.kv_set(key, f"fail{tries}")
-            store.kv_set(key + ":ts", str(now))
-            store.kv_set(key + ":err", str(e)[:200])
-    return n
-
-
-# ------------------------------------------------------------------ weekly report (#17)
-def weekly_text(store, cfg, now: float | None = None) -> str:
-    from . import insights
-    now = now if now is not None else time.time()
-    since = now - 7 * 86400
-    clips = store.clips()
-    made = [c for c in clips if c["updated"] and c["updated"] >= since and c["status"] in ("ready", "approved", "uploaded")]
-    up = [c for c in clips if c["status"] == "uploaded" and (c["scheduled_at"] or c["updated"] or 0) >= since]
-    rej = [c for c in clips if c["status"] == "rejected" and (c["updated"] or 0) >= since]
-    rep = insights.report(store, cfg)
-    lines = [f"Last 7 days: {len(made)} clips made, {len(up)} published/scheduled, {len(rej)} rejected."]
-    if rep["top"]:
-        t = rep["top"][0]
-        lines.append(f"Best clip: {t['title']} ({t['views']} views, {t['category']}, slot {t['slot']}).")
-    cats = [c for c in rep["categories"] if c.get("avg_rate")]
-    if cats:
-        lines.append("Best category: " + cats[0]["category"] + f" ({cats[0]['avg_rate']} views/hour).")
-    sl = sorted(rep["slots"], key=lambda s: -s["avg_rate"])
-    if sl:
-        lines.append(f"Best slot: {sl[0]['key']} PKT ({sl[0]['avg_rate']} views/hour).")
-    sug = rep.get("suggestion") or {}
-    if sug.get("reason"):
-        lines.append("Slots: " + sug["reason"])
-    now_ts = now
-    future = sum(1 for c in clips if c["status"] == "uploaded" and c["scheduled_at"] and c["scheduled_at"] > now_ts)
-    lines.append(f"Next week: {future} video(s) already scheduled, {len(store.clips(status='approved'))} approved waiting.")
-    return "\n".join(lines)
-
-
-def weekly_report(cfg, store, notifier, now: float | None = None) -> bool:
-    """Sends the report once every 7 days (after 20:00 Pakistan time). True when sent."""
-    if not cfg.get("assistant.weekly_report", True):
-        return False
-    now = now if now is not None else time.time()
-    last = float(store.kv_get("weekly_ts", "0") or 0)
-    if now - last < 7 * 86400:
-        return False
-    hour = time.gmtime(now + 5 * 3600).tm_hour
-    if last and hour < 20:
-        return False
-    if not last:                                       # first run: start the 7-day clock, send next time
-        store.kv_set("weekly_ts", str(now))
-        return False
-    store.kv_set("weekly_ts", str(now))
-    notifier.send("info", "Weekly report", weekly_text(store, cfg, now))
-    return True

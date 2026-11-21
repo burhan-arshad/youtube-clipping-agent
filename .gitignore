@@ -14,3 +14,5 @@ __pycache__/
 proofs/
 cookies.txt
 token_streamer.json
+links.txt
+backups/

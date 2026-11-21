@@ -39,6 +39,21 @@ FIELDS: list[dict] = [
      "help": "Higher = fewer but better streamer clips. 62 is a good start."},
     {"group": "AI (Gemini)", "key": "streamer.min_reaction", "label": "Streamer clips: minimum reaction (0-100)", "type": "number",
      "help": "Only clips where the streamer laughs, screams or is shocked. 45 = clearly amused/surprised, 65+ = loud laughing or screaming only."},
+    {"group": "Safety & disk", "key": "cleanup.max_work_gb", "label": "Work folder: maximum size (GB)", "type": "number",
+     "help": "Recordings and temporary files never grow beyond this; old files are deleted first."},
+    {"group": "Safety & disk", "key": "cleanup.stop_free_gb", "label": "Pause live recording below this free space (GB)", "type": "number"},
+    {"group": "Autopilot", "key": "autopilot.enabled", "label": "Autopilot: one link per day from the links file", "type": "bool"},
+    {"group": "Autopilot", "key": "autopilot.links_file", "label": "Links file", "type": "text",
+     "help": "One video link per line. Optional: link | streamer name | facecam corner."},
+    {"group": "Autopilot", "key": "autopilot.run_at", "label": "Start time each day (HH:MM)", "type": "text"},
+    {"group": "Autopilot", "key": "autopilot.links_per_day", "label": "Links per day", "type": "number"},
+    {"group": "Autopilot", "key": "autopilot.voiceover_clips", "label": "Voice-over clips per link", "type": "number"},
+    {"group": "Autopilot", "key": "autopilot.streamer_clips", "label": "Streamer clips per link", "type": "number"},
+    {"group": "Autopilot", "key": "autopilot.warn_links_left", "label": "Remind me when this many links are left", "type": "number"},
+    {"group": "Safety & disk", "key": "backup.enabled", "label": "Daily backup of database and settings", "type": "bool"},
+    {"group": "Safety & disk", "key": "backup.keep", "label": "Backups to keep", "type": "number"},
+    {"group": "Video look", "key": "streamer.smart_bounds", "label": "Streamer clips: never cut a sentence in half", "type": "bool",
+     "help": "Moves the start/end to the beginning/end of the sentence (uses Whisper, a few seconds more per clip)."},
     # ---- folders
     {"group": "Folders", "key": "paths.output", "label": "Output folder (finished clips)", "type": "folder",
      "help": "Final Shorts (mp4) are saved here"},
@@ -99,8 +114,6 @@ FIELDS: list[dict] = [
     {"group": "YouTube upload", "key": "upload.max_per_day", "label": "Max uploads per day",
      "type": "number"},
     {"group": "YouTube upload", "key": "upload.title_suffix", "label": "Title suffix", "type": "text"},
-    {"group": "YouTube upload", "key": "upload.first_comment", "label": "Post a first comment when a video goes public", "type": "bool",
-     "help": "Uses the closing question of the script. Needs one extra YouTube permission (sign in again). YouTube's API cannot pin it: pin it yourself in Studio if you like."},
     {"group": "YouTube upload", "key": "upload.synthetic_disclosure",
      "label": "Mark as 'altered / synthetic content' (AI voice)", "type": "bool"},
     {"group": "YouTube upload", "key": "review.auto_approve", "label": "Auto-approve clips (skip manual review)",
@@ -146,8 +159,6 @@ FIELDS: list[dict] = [
      "help": "Alerts are sent from and to this Gmail. Needs the app password below."},
     {"group": "Notifications", "key": "env:NOTIFY_EMAIL_PASSWORD", "label": "Gmail app password", "type": "password",
      "help": "Google Account > Security > 2-Step Verification > App passwords. Not your normal password."},
-    {"group": "Notifications", "key": "notify.discord_webhook", "label": "Discord webhook URL (optional)", "type": "text",
-     "help": "Discord channel > Edit > Integrations > Webhooks > Copy URL."},
     {"group": "Notifications", "key": "env:TELEGRAM_BOT_TOKEN", "label": "Telegram bot token (optional, blocked in Pakistan)", "type": "password",
      "help": "Create a bot with @BotFather and paste its token."},
     {"group": "Notifications", "key": "notify.telegram_chat_id", "label": "Telegram chat id (optional)", "type": "text"},
@@ -295,5 +306,13 @@ def save(root: Path, values: dict, config_path: str | None = None) -> list[str]:
         _set(user, k, v)
         saved.append(k)
     p = config_file(root, config_path)
-    p.write_text(yaml.safe_dump(user, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    text = yaml.safe_dump(user, sort_keys=False, allow_unicode=True)
+    if p.is_file():                                   # safe save: keep the last good copy, write to a temp file, then swap
+        try:
+            p.with_suffix(".yaml.bak").write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
+    tmp = p.with_suffix(".yaml.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(p)
     return saved

@@ -201,49 +201,12 @@ def test_humanize_error_known_and_unknown():
     assert extras.humanize_error("something weird") == ""
 
 
-def test_first_comment_posts_once_after_publish(cfg0, st, monkeypatch):
-    cfg0.data["upload"]["first_comment"] = True
-    now = time.time()
-    clips = [{"id": 1, "youtube_id": "yt1", "scheduled_at": now - 60, "updated": now - 3600, "script": "Wow. Did you see that crash?"},
-             {"id": 2, "youtube_id": "yt2", "scheduled_at": now + 3600, "updated": now, "script": "x"},
-             {"id": 3, "youtube_id": None, "scheduled_at": now - 60, "updated": now, "script": "x"}]
-    monkeypatch.setattr(st, "clips", lambda status=None, *a, **k: clips)
-    posted = []
-    assert extras.first_comments(cfg0, st, post=lambda c, v, t: posted.append((v, t)), now=now) == 1
-    assert posted == [("yt1", "Did you see that crash?")]
-    assert extras.first_comments(cfg0, st, post=lambda c, v, t: posted.append((v, t)), now=now) == 0      # not twice
-
-    def boom(c, v, t):
-        raise RuntimeError("403 insufficient scope")
-    clips[0]["id"] = 9
-    assert extras.first_comments(cfg0, st, post=boom, now=now) == 0                                      # failure is non-fatal
-    assert st.kv_get("fc:9") == "fail1"
-    cfg0.data["upload"]["first_comment"] = False
-    assert extras.first_comments(cfg0, st, post=boom, now=now) == 0
-
-
-def test_weekly_report_every_seven_days(cfg0, st):
-    sent = []
-
-    class N:
-        def send(self, level, title, body=""):
-            sent.append((title, body))
-    now = datetime(2026, 11, 22, 16, 30, tzinfo=timezone.utc).timestamp()          # 21:30 PKT
-    assert extras.weekly_report(cfg0, st, N(), now) is False                       # first call only starts the clock
-    assert extras.weekly_report(cfg0, st, N(), now + 3 * 86400) is False
-    assert extras.weekly_report(cfg0, st, N(), now + 7 * 86400) is True
-    assert sent and "Last 7 days" in sent[0][1]
-    assert extras.weekly_report(cfg0, st, N(), now + 8 * 86400) is False
-
-
 def test_selftest_runs_and_flags_missing_key(cfg0, st, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     res = extras.selftest(cfg0, st)
     names = {c["name"]: c for c in res}
     assert names["Program files"]["level"] == "ok"
     assert names["Gemini API key"]["level"] == "bad" and names["Title rules"]["level"] == "ok"
-    s = extras.run_startup_check(cfg0, st)
-    assert any(c["name"] == "Gemini API key" for c in s["bad"]) and json.loads(st.kv_get("startup_check"))["ts"]
 
 
 # ------------------------------------------------------------------ web

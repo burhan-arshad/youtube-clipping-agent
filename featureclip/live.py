@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import cleanup
 from .ffutil import av_start_offset
 from .pipeline import log
 from .sources import resolve_source
@@ -119,7 +120,7 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
     out_dir.mkdir(parents=True, exist_ok=True)
     url = url or src.url
     if not url and not local_test_file:
-        raise ValueError("no stream URL: pass --url or set url in sources.yaml")
+        raise ValueError("no stream URL: pass --url (a link is required)")
 
     stop_evt = stop if stop is not None else threading.Event()
     q: "queue.Queue[Path]" = queue.Queue()
@@ -134,6 +135,14 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
         rec, run, seen = None, (max(used) + 1 if used else 0), set(existing)   # a new run never reuses an old piece name
         try:
             while not stop_evt.is_set():
+                if rec is None and cleanup.disk_critical(pipe.cfg, out_dir):
+                    if not state.get("disk_warned"):
+                        state["disk_warned"] = True
+                        log(f"DISK ALMOST FULL ({cleanup.free_gb(out_dir):.1f} GB free): recording is paused until space is freed "
+                            "(old files are cleaned automatically)")
+                    stop_evt.wait(30)
+                    continue
+                state["disk_warned"] = False
                 if rec is None:
                     try:
                         inputs = [local_test_file] if local_test_file else stream_urls(url, max_height, pipe.cfg)
@@ -149,6 +158,10 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
                         log(f"waiting for stream: {e}  (retry in {retry_seconds}s)")
                         stop_evt.wait(retry_seconds)
                         continue
+                if rec.poll() is None and cleanup.disk_critical(pipe.cfg, out_dir):
+                    log("disk almost full: stopping the recording for now")
+                    rec.terminate()
+                    stop_evt.wait(2)
                 segs = sorted(p for p in out_dir.glob("seg_*.ts") if p.name not in seen)
                 finished = rec.poll() is not None
                 for s in (segs if finished else segs[:-1]):      # the newest piece is still being written

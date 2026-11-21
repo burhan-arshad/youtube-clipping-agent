@@ -1,0 +1,113 @@
+
+data
+    backups
+        featureclip_20261121_1126.zip
+    ui
+    featureclip.db
+    featureclip.db-shm
+    featureclip.db-wal
+    heartbeat.json
+    web_sources.json
+docs
+    outreach_message.md
+featureclip
+    data
+        haarcascade_frontalface_alt2.xml
+        haarcascade_frontalface_default.xml
+        haarcascade_profileface.xml
+    web
+        static
+            index.html
+        __init__.py
+        app.py
+        jobs.py
+        settings_store.py
+    __init__.py
+    __main__.py
+    activity.py
+    agent.py
+    ai_layout.py
+    autopilot.py
+    backup.py
+    bounds.py
+    candidates.py
+    captions.py
+    channels.py
+    cleanup.py
+    cli.py
+    compose.py
+    config.py
+    extras.py
+    ffutil.py
+    heartbeat.py
+    ingest.py
+    insights.py
+    judge.py
+    launch.py
+    layout.py
+    learn.py
+    live.py
+    llm.py
+    llm_limits.py
+    metadata.py
+    music.py
+    narrate.py
+    notify.py
+    pipeline.py
+    qa.py
+    quota.py
+    safe.py
+    schedule.py
+    signals.py
+    sources.py
+    store.py
+    styles.py
+    supervisor.py
+    transcribe.py
+    tts.py
+    uploader.py
+output
+tests
+    conftest.py
+    test_activity.py
+    test_agent.py
+    test_ai_layout.py
+    test_learning_safety.py
+    test_live.py
+    test_live_helpers.py
+    test_llm.py
+    test_pipeline.py
+    test_signals_layout.py
+    test_streamer.py
+    test_text_stages.py
+    test_update14.py
+    test_update30.py
+    test_update32.py
+    test_uploader_mock.py
+    test_voice_sync.py
+    test_web.py
+tools
+    make_test_video.py
+work
+.env
+.env.example
+.gitignore
+client_secret.json
+config.example.yaml
+config.yaml
+cookies.txt
+install_autostart.bat
+layout.png
+links.txt.example
+PROJECT_STRUCTURE.txt
+pyproject.toml
+README.md
+remove_autostart.bat
+requirements.txt
+setup_windows.bat
+start_live.bat
+start_ui.bat
+start_ui_hidden.bat
+start_watchdog.bat
+token.json
+token_streamer.json

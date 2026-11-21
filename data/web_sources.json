@@ -190,5 +190,19 @@
    "clips": 10,
    "since": 1795178389.2728143
   }
+ },
+ "web-b8e17f49": {
+  "id": "web-b8e17f49",
+  "streamer": "Live Insan",
+  "url": "https://www.youtube.com/watch?v=-GW92hZ94ys",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@liveinsaan",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "mode": "streamer",
+   "clips": 10,
+   "since": 1795242658.409719
+  }
  }
 }

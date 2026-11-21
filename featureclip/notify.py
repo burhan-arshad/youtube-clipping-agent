@@ -35,12 +35,6 @@ class Notifier:
             except Exception:
                 pass
 
-        hook = str(self.cfg.get("notify.discord_webhook", "") or "").strip()
-        if hook:
-            try:
-                requests.post(hook, json={"content": f"**{title}**\n{body}".strip()[:1900]}, timeout=10)
-            except Exception:
-                pass
         to = str(self.cfg.get("notify.email_to", "") or "").strip()
         pw = os.environ.get("NOTIFY_EMAIL_PASSWORD", "").strip()
         if to and pw:

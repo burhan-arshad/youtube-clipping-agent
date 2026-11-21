@@ -18,8 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import channels, launch, learn, metadata, safe, schedule, captions, candidates, compose, judge, layout as lay, music, narrate, qa, signals, uploader
-from .ffutil import extract_audio_wav, probe
+from . import bounds, channels, heartbeat, launch, learn, metadata, safe, schedule, captions, candidates, compose, judge, layout as lay, music, narrate, qa, signals, uploader
+from .ffutil import check_stop, extract_audio_wav, probe
 from .ingest import describe, ingest
 from .llm import LLM, LLMError
 from .sources import Source, resolve_source
@@ -28,6 +28,8 @@ from .transcribe import Transcript, transcribe_file
 
 
 def log(msg: str) -> None:
+    heartbeat.beat()
+    check_stop()                       # the Stop button cancels the job at its next log line
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
@@ -324,18 +326,33 @@ class Pipeline:
         g = self.cfg.get
         words, text = [], (tr.text or "").strip()
         wav = None
-        if g("streamer.captions", True):
+        if g("streamer.captions", True) or g("streamer.smart_bounds", True):
             try:
-                wav = extract_audio_wav(video["path"], cd / "clip_audio.wav", start, dur)
-                tw = transcribe_file(wav, self.cfg, words=True)
+                vlen = float(probe(video["path"])["duration"] or 0) or None
+                pad_a, pad_b = (4.0, 5.0) if g("streamer.smart_bounds", True) else (0.0, 0.0)
+                w0 = max(0.0, start - pad_a)
+                w1 = min(vlen, start + dur + pad_b) if vlen else start + dur + pad_b
+                wav = extract_audio_wav(video["path"], cd / "clip_audio.wav", w0, w1 - w0)
+                tw = transcribe_file(wav, self.cfg, words=True, offset=w0)       # word times in video time
                 if tw.available and tw.words:
-                    words = list(tw.words)
-                    text = " ".join(w for _, _, w in tw.words)
+                    allw = list(tw.words)
+                    if g("streamer.smart_bounds", True):
+                        ns, ne, info = bounds.refine(allw, start, start + dur, video_len=vlen,
+                                                     max_len=float(g("streamer.clip_max", 45)) + 4)
+                        if info["start_moved"] or info["end_moved"]:
+                            log(f"  clean cut: start {-info['start_moved']:+.1f}s, end {info['end_moved']:+.1f}s (no sentence cut in half)")
+                            j["bounds"] = {"from": [round(start, 2), round(start + dur, 2)], "to": [round(ns, 2), round(ne, 2)]}
+                        start, dur = ns, ne - ns
+                    inside = [(a - start, b - start, w) for a, b, w in allw if a >= start - 0.05 and b <= start + dur + 0.05]
+                    words = inside
+                    text = " ".join(w for _, _, w in inside)
             except Exception as e:
-                log(f"  (no captions: {e})")
+                log(f"  (no captions / clean cut: {e})")
             finally:
                 if wav and Path(wav).exists():
                     Path(wav).unlink()
+        if not g("streamer.captions", True):
+            words = []
         ass = None
         if words:
             ass = captions.write_ass(cd / "captions.ass", words, "", self.cfg, offset=0.0, title_box=None,
@@ -360,7 +377,7 @@ class Pipeline:
                 tg = []
             meta = {"title": c["title"] or "", "description": c["description"] or "", "tags": tg, "thumb_text": ""}
         else:
-            metadata.PLAYBOOK = learn.playbook_text(self.store, self.cfg)
+            metadata.PLAYBOOK = learn.playbook_text(self.store, self.cfg, "streamer")
             meta = metadata.generate(self.llm, self.cfg, j, text[:600], hook, src.streamer if src else "",
                                      src.credit_url if src else "")
         thumb = None
@@ -424,7 +441,7 @@ class Pipeline:
             best = None                                   # (match, script_dict, check): the best attempt so far
             from . import styles as _styles
             narrate.STYLE_WEIGHTS = _styles.weights(self.store, self.cfg)
-            narrate.PLAYBOOK = metadata.PLAYBOOK = learn.playbook_text(self.store, self.cfg)
+            narrate.PLAYBOOK = metadata.PLAYBOOK = learn.playbook_text(self.store, self.cfg, "voiceover")
             for attempt in range(int(g("judge.script_attempts", 2))):
                 s = narrate.write_script(self.llm, self.cfg, j, tr.text, dur, images=tl_imgs, feedback=feedback,
                                          timeline=timeline)
@@ -573,7 +590,8 @@ class Pipeline:
                 out.append(datetime.fromtimestamp(c["scheduled_at"], timezone.utc))
         return out
 
-    def upload(self, limit: int | None = None, dry_run: bool = False, only: list[int] | None = None, public_now: bool = False) -> int:
+    def upload(self, limit: int | None = None, dry_run: bool = False, only: list[int] | None = None, public_now: bool = False,
+               channel: str | None = None) -> int:
         """Upload approved clips. Voice-over clips go to the voice-over channel, streamer clips to the streamer
         channel (each with its own YouTube login, publish slots, daily cap and limit pause). With schedule.enabled each
         clip gets the next free publish slot (PKT times from schedule.slots) and YouTube publishes it by itself."""
@@ -617,6 +635,8 @@ class Pipeline:
                 return 0.0
         for c in sorted(self.store.clips(status="approved"), key=lambda c: -_quality(c)):
             if only is not None and c["id"] not in only:
+                continue
+            if channel and channels.key_of_clip(c) != channel:         # YouTube tab: one channel at a time
                 continue
             if limit is not None and done >= limit:
                 break

@@ -8,7 +8,7 @@ Two steps:
   2. choose_crop(): once per clip
        - slide a 9:16 (or 4:5) window over the gameplay rectangle, pick the position
          with the most motion/detail, never overlapping the facecam box.
-If auto-detection is wrong for a streamer, put a manual `crop: [x, y, w, h]` in sources.yaml.
+If auto-detection is wrong for a streamer, use the crop fields when adding the link.
 """
 from __future__ import annotations
 

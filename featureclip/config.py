@@ -66,7 +66,7 @@ DEFAULTS: dict[str, Any] = {
         "buffer_days": 2,               # notify me when less than this many days of clips are left
         "check_every_seconds": 60,
     },
-    "notify": {"ntfy_topic": "", "telegram_chat_id": "", "discord_webhook": "", "email_to": ""},
+    "notify": {"ntfy_topic": "", "telegram_chat_id": "", "email_to": ""},
     "branding": {
         # Shown under the heading on every Short (e.g. "@DetailRadar"). Empty = nothing is shown.
         "handle": "",
@@ -189,8 +189,6 @@ DEFAULTS: dict[str, Any] = {
         "synthetic_disclosure": True,     # YouTube "altered or synthetic content" flag (AI voice)
         "made_for_kids": False,
         "title_suffix": " #Shorts",
-        "first_comment": False,         # post a question as the first comment when a video goes public (needs one extra login)
-        "first_comment_text": "What do you think? Tell me in the comments!",
         "description_footer": "",
         "client_secret": "client_secret.json",
         "token": "token.json",
@@ -201,7 +199,7 @@ DEFAULTS: dict[str, Any] = {
     "insights": {"min_samples": 3, "min_age_hours": 12, "refresh_hours": 3},
     "streamer": {                    # layout.mode "streamer": webcam on top, gameplay below, the streamer's own voice
         "top_ratio": 0.36, "game_aspect": 1.2, "captions": True,
-        "clip_min": 20, "clip_max": 45, "audio_delay": 0.0,   # streamer clips: long enough for set-up + reaction
+        "clip_min": 20, "clip_max": 45, "audio_delay": 0.0, "smart_bounds": True,   # streamer clips: long enough for set-up + reaction
         "quality_floor": 62, "min_reaction": 45,              # stricter than voice-over clips: the streamer's own voice must carry the clip
     },
     # one YouTube login per kind of clip: voice-over clips use upload.token, streamer clips their own channel
@@ -212,7 +210,13 @@ DEFAULTS: dict[str, Any] = {
         "raw_hours": 12,                  # delete recordings / downloads this old once their clips are made
         "keep_output_days": 7,            # delete finished mp4 this many days after upload
         "min_free_gb": 4,                 # below this free space, clean up much more aggressively
+        "max_work_gb": 20,                # the work folder (recordings, temp files) may never grow beyond this
+        "stop_free_gb": 1.5,              # live recording pauses when the disk has less than this free
     },
+    "autopilot": {"enabled": False, "links_file": "links.txt", "run_at": "09:00", "links_per_day": 1,
+                  "voiceover_clips": 5, "streamer_clips": 5, "warn_links_left": 3},
+    "backup": {"enabled": True, "every_hours": 24, "keep": 7, "include_secrets": False},
+    "watchdog": {"stale_minutes": 20},
     "safe": {"auto": True, "fail_streak": 3, "reject_streak": 8},
     "review": {
         # False = a human approves every clip before upload (recommended while launching).

@@ -1,0 +1,7 @@
+[2026-11-21 16:49:36] watchdog: program started (pid 21496)
+[2026-11-21 16:49:56] watchdog: restarting: the program stopped (exit code 1)
+[2026-11-21 16:50:01] watchdog: program started (pid 20428)
+[2026-11-21 16:50:21] watchdog: restarting: the program stopped (exit code 1)
+[2026-11-21 16:50:26] watchdog: program started (pid 14084)
+[2026-11-21 16:50:31] watchdog: program started (pid 11652)
+[2026-11-21 18:03:40] watchdog: program started (pid 22852)

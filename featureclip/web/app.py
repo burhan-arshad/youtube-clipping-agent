@@ -32,13 +32,6 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
     jm = JobManager(root, config_path)
     assistant = Assistant(root, config_path, jm)
     assistant.start()
-    try:                                  # after every start (e.g. after copying an update) check that everything loads
-        _c0 = load_config(config_path, root=root)
-        _s0 = Store(_c0.path("paths.db"))
-        extras.run_startup_check(_c0, _s0)
-        _s0.close()
-    except Exception:
-        pass
 
     def cfg():
         return load_config(config_path, root=root)
@@ -115,7 +108,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             add(f"YouTube login: {channels.LABELS[_k]}", channels.logged_in(c, _k), "Open the YouTube tab and sign in")
         from .. import schedule as _s
         add("Publish slots valid", bool(_s.parse_slots(c.get("schedule.slots", _s.DEFAULT_SLOTS))), "Settings > Schedule: use HH:MM, comma separated")
-        add("Phone/email alerts set", bool(c.get("notify.ntfy_topic") or c.get("notify.discord_webhook") or c.get("notify.email_to")),
+        add("Phone/email alerts set", bool(c.get("notify.ntfy_topic") or c.get("notify.email_to")),
             "Settings > Notifications: ntfy topic, Discord webhook or Gmail (Telegram is blocked in Pakistan)")
         kd = c.path("paths.models") / "kokoro"
         add("Voice model (Kokoro)", all((kd / n).is_file() for n in ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin")),
@@ -270,8 +263,11 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         elif kind == "build":
             j = jm.submit("build", f"Rebuild: video {body['video_id']}", video_id=int(body["video_id"]))
         elif kind == "upload":
-            j = jm.submit("upload", "YouTube upload" + (" (dry run)" if body.get("dry_run") else ""),
-                          dry_run=bool(body.get("dry_run")), limit=body.get("limit"))
+            j = jm.submit("upload", "YouTube upload" + (f" ({channels.LABELS[body['channel']]})" if body.get("channel") in channels.KEYS else "")
+                          + (" NOW" if body.get("public_now") else "") + (" (dry run)" if body.get("dry_run") else ""),
+                          dry_run=bool(body.get("dry_run")), limit=body.get("limit"),
+                          channel=(body.get("channel") if body.get("channel") in channels.KEYS else None),
+                          public_now=bool(body.get("public_now")))
         elif kind == "youtube_login":
             key = body.get("channel") or "voiceover"
             if key not in channels.KEYS:
@@ -558,6 +554,56 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             pass
         return {"updated": n}
 
+    @app.get("/api/backups")
+    def backups_list():
+        from .. import backup
+        c = cfg()
+        return {"items": backup.listing(c), "enabled": bool(c.get("backup.enabled", True)),
+                "every_hours": float(c.get("backup.every_hours", 24)), "keep": int(c.get("backup.keep", 7))}
+
+    @app.post("/api/backups")
+    def backups_run():
+        from .. import backup
+        c = cfg()
+        try:
+            f = backup.run(c)
+        except Exception as e:
+            raise HTTPException(400, f"{type(e).__name__}: {str(e)[:200]}")
+        store(c).kv_set("backup_ts", str(time.time()))
+        return {"saved": f.name}
+
+    @app.get("/api/autopilot")
+    def autopilot_status():
+        from .. import autopilot
+        c = cfg()
+        return autopilot.status(c, store(c))
+
+    @app.post("/api/autopilot/links")
+    def autopilot_links(body: dict):
+        from .. import autopilot
+        c = cfg()
+        n = autopilot.add_links(c, str(body.get("text", "")))
+        return {"added": n}
+
+    @app.post("/api/autopilot/retry")
+    def autopilot_retry(body: dict):
+        from .. import autopilot
+        c = cfg()
+        if not autopilot.retry(store(c), str(body.get("key", ""))):
+            raise HTTPException(400, "This link cannot be retried now")
+        return {"ok": True}
+
+    @app.post("/api/autopilot/run")
+    def autopilot_run():
+        """Take the next link now (ignores the daily limit once)."""
+        from .. import autopilot
+        c = cfg()
+        s = store(c)
+        st = autopilot.load_state(s)
+        st["started"] = {}
+        autopilot.save_state(s, st)
+        return {"ok": True}
+
     @app.get("/api/learn")
     def learn_report():
         c = cfg()
@@ -565,6 +611,10 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         r = learn.load(st) or learn.build(st, c)
         r["analytics_on"] = bool(c.get("upload.analytics", False))
         r["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(r.get("playbook"))
+        s = learn.load(st, "streamer") or learn.build(st, c, "streamer")
+        s["analytics_on"] = r["analytics_on"]
+        s["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(s.get("playbook"))
+        r["streamer"] = s
         return r
 
     @app.post("/api/learn/refresh")
@@ -677,6 +727,36 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             return safe.release(c, store(c))
         except Exception as e:
             raise HTTPException(400, str(e)[:400])
+
+    @app.get("/api/memory")
+    def memory_info():
+        from .. import memory
+        c = cfg()
+        return memory.usage(c, store(c))
+
+    @app.post("/api/memory/delete")
+    def memory_delete(body: dict = Body(...)):
+        from .. import memory
+        c = cfg()
+        if jm.running() is not None:
+            raise HTTPException(400, "A job is running. Stop it first (Activity tab), then delete.")
+        what = str(body.get("what", ""))
+        if what not in ("clips", "work"):
+            raise HTTPException(400, "what must be clips or work")
+        return memory.delete(c, store(c), what, only_done=bool(body.get("only_done", True)))
+
+    @app.post("/api/stop-all")
+    def stop_all():
+        """Stop every running or waiting job, and mark the assistant's running links as stopped."""
+        n = 0
+        for j in list(jm.jobs):
+            if j.status in ("running", "queued"):
+                jm.stop(j.id)
+                n += 1
+        st = store()
+        for s in st.agent_sources("running"):
+            st.update_agent_source(s["id"], status="error", finished=time.time(), note="stopped by you")
+        return {"stopped": n}
 
     @app.post("/api/cleanup")
     def cleanup_now(body: dict = Body(default={})):
@@ -904,6 +984,8 @@ def serve(root: str = ".", config_path: str | None = None, host: str = "127.0.0.
             return not (ei and isinstance(ei[1], (ConnectionResetError, ConnectionAbortedError)))
     logging.getLogger("asyncio").addFilter(_QuietResets())
     app = create_app(root, config_path)
+    from .. import heartbeat
+    heartbeat.start_writer(Path(root).resolve() / "data" / "heartbeat.json")
     url = f"http://{host}:{port}"
     print(f"featureclip UI: {url}   (press Ctrl+C in this window to stop)")
     if open_browser:

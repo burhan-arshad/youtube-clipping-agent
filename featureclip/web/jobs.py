@@ -12,8 +12,9 @@ from argparse import Namespace
 from pathlib import Path
 
 from ..config import load_config
+from ..ffutil import set_stop
 from ..pipeline import Pipeline
-from ..sources import Source, load_sources
+from ..sources import Source
 from ..store import Store
 
 
@@ -99,7 +100,7 @@ def web_sources_file(root: Path) -> Path:
 
 
 def load_all_sources(root: Path) -> dict[str, Source]:
-    sources = load_sources(root / "sources.yaml")
+    sources: dict[str, Source] = {}
     f = web_sources_file(root)
     if f.is_file():
         try:
@@ -148,9 +149,10 @@ def source_for(url_or_path: str, streamer: str = "", credit_url: str = "", facec
     if int(clips or 0) > 0:
         extra["clips"] = int(clips)                   # how many clips the owner wants from this link
         extra["since"] = time.time()
+    sfx = "-streamer" if mode == "streamer" else ""      # same link, two kinds of clips: two sources, one downloaded file
     if v.lower().startswith(("http://", "https://")):
-        return Source(id=f"web-{h}", streamer=streamer, url=v, credit_url=credit_url, facecam=fc, extra=extra)
-    return Source(id=f"file-{h}", streamer=streamer, path=v, credit_url=credit_url, facecam=fc, extra=extra)
+        return Source(id=f"web-{h}{sfx}", streamer=streamer, url=v, credit_url=credit_url, facecam=fc, extra=extra)
+    return Source(id=f"file-{h}{sfx}", streamer=streamer, path=v, credit_url=credit_url, facecam=fc, extra=extra)
 
 
 def layout_preview(root: Path, config_path, video: str, facecam: str, crop, out: Path, say) -> None:
@@ -224,6 +226,7 @@ class JobManager:
                 job.started = time.time()
             assert _router_out is not None
             _router_out.local.job = job
+            set_stop(job.stop_event)
             try:
                 getattr(self, f"_do_{job.kind}")(job)
                 if job.status == "running":
@@ -236,6 +239,7 @@ class JobManager:
             finally:
                 job.finished = time.time()
                 _router_out.local.job = None
+                set_stop(None)
 
     def _pipeline(self):
         cfg = load_config(self.config_path, root=self.root)
@@ -335,7 +339,7 @@ class JobManager:
     def _do_upload(self, job: Job):
         cfg, store, sources, p = self._pipeline()
         n = p.upload(limit=job.args.get("limit"), dry_run=bool(job.args.get("dry_run")), only=job.args.get("only"),
-                     public_now=bool(job.args.get("public_now")))
+                     public_now=bool(job.args.get("public_now")), channel=job.args.get("channel") or None)
         job.result = {"uploaded": n}
 
     def _do_youtube_login(self, job: Job):

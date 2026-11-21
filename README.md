@@ -1,123 +1,329 @@
-# youtube-clipping-agent
+# featureclip
 
-**Free, CPU-only tool that turns gaming streams into YouTube Shorts and publishes them for you.**
-It watches live streams or recorded videos, finds the moments worth clipping, builds vertical 9:16 Shorts,
-writes the title and description, and uploads them on a schedule to one or two YouTube channels.
-Built for a laptop with 8 GB RAM and no GPU. The only online AI it needs is Google's free Gemini API.
+**A free, local-first tool that turns streamers' gameplay videos into YouTube Shorts and publishes them for you.**
+
+It finds the clip-worthy moments, builds vertical (9:16) Shorts, checks their quality, writes the titles and
+descriptions, and schedules them on YouTube. It can run on autopilot: put video links in a text file and it makes and
+schedules clips every day, learns from the results, restarts itself after a crash or reboot, and tells you when it needs you.
+
+> Built for a normal Windows laptop: **8 GB RAM, no GPU**, no paid services. Speech-to-text, voice and video editing
+> run locally on the CPU. The only online AI is Google's **free** Gemini API.
 
 ---
 
-## Two kinds of clips
+## Contents
+1. [What it makes](#what-it-makes)
+2. [How it works](#how-it-works)
+3. [Features](#features)
+4. [Install (Windows)](#install-windows)
+5. [Quick start](#quick-start)
+6. [Autopilot](#autopilot)
+7. [The web UI (tabs)](#the-web-ui-tabs)
+8. [Two channels, two clip types](#two-channels-two-clip-types)
+9. [Configuration](#configuration)
+10. [Command line](#command-line)
+11. [Reliability and safety](#reliability-and-safety)
+12. [Data, backups and disk space](#data-backups-and-disk-space)
+13. [Troubleshooting](#troubleshooting)
+14. [Tests](#tests)
+15. [Project layout](#project-layout)
+16. [Known limits](#known-limits)
+17. [Copyright and platform rules](#copyright-and-platform-rules-read-this)
+18. [License](#license)
 
-| | **Voice-over clips** | **Streamer clips** |
-|---|---|---|
-| Picks | game features, funny, chaotic, epic and discovery moments | strong reactions only: laughing, screaming, shock |
-| Look | gameplay cropped to 9:16 (hybrid or fill layout), captions | webcam on top, gameplay below |
-| Sound | AI voice-over (Gemini TTS, Kokoro offline fallback) + generated copyright-free music | the streamer's own voice and the game's original audio |
-| Text | script, title and description about the game moment | title and description about the streamer's reaction, with credit by name |
-| Goes to | channel 1 | channel 2 |
+---
 
-You choose the type and how many clips you want every time you give it a link. Every clip remembers its type, so
-the assistant uploads it to the right channel, with that channel's own login, publish slots and daily limit.
+## What it makes
+
+| Clip type | Look | Audio | Goes to |
+|---|---|---|---|
+| **Voice-over** | gameplay filling the 9:16 screen (or a 4:5 block over a blurred copy), burned-in captions | AI-written short script, spoken by a local voice (Kokoro) or Gemini voice, soft background music | YouTube channel 1 (voice-over channel) |
+| **Streamer** | the streamer's webcam on top, gameplay below | the streamer's **own** audio, no script, no voice, no music | YouTube channel 2 (streamer channel) |
+
+Streamer clips are **reaction-only**: the AI keeps moments where the streamer laughs, screams or is clearly shocked, and the
+title/description are written about the streamer's reaction, not about the gameplay. Each clip starts at the beginning of a
+sentence and ends at the end of one (never cut mid-word).
 
 ## How it works
 
 ```
-source (live piece or video)
-   -> scan      audio loudness + motion peaks -> candidate windows
-   -> judge     Gemini looks at frames (+ face close-ups for streamer clips) and the Whisper transcript
-   -> build     voice-over lane: script -> voice -> music -> crop -> captions
-                streamer lane:   find webcam -> stack webcam + game -> original audio -> captions
-   -> review    AI quality, wording and policy checks, then you approve (or the assistant does)
-   -> upload    next free publish slot per channel, or "Upload now"
-   -> learn     YouTube stats feed a small playbook that nudges what gets picked and how it is written
+ video link / links.txt / live stream
+        │
+        ▼
+  ┌───────────┐   audio loudness bursts, motion, scene cuts (cheap, no AI)
+  │   scan    │──► ranked candidate windows
+  └─────┬─────┘
+        ▼
+  ┌───────────┐   Whisper (local) hears the speech, Gemini looks at frames
+  │   judge   │──► "is this clip-worthy?" + category + (streamer mode) face close-ups, reaction score
+  └─────┬─────┘
+        ▼
+  ┌───────────┐   find gameplay area / webcam, crop 9:16, script + voice (voice-over mode),
+  │   build   │   captions, loudness, music, one ffmpeg render, automatic QA gates
+  └─────┬─────┘
+        ▼
+  ┌───────────┐   AI reviewer re-checks title, description, thumbnail and the video itself;
+  │  review   │   good clips are approved automatically (or wait for you in "ask" mode)
+  └─────┬─────┘
+        ▼
+  ┌───────────┐   next free publish slot of that clip's channel (PKT slots), resumable upload,
+  │  publish  │   daily caps, YouTube limit handling
+  └─────┬─────┘
+        ▼
+  stats ──► learning (per-channel "playbook") ──► better prompts next time
 ```
 
-Everything except the Gemini calls and the YouTube upload runs locally: ffmpeg, faster-whisper, Kokoro,
-OpenCV and a SQLite database.
+Every stage is resumable: signals, transcripts and finished clips are cached, so a crash or a restart never loses work.
 
 ## Features
 
-- **Web UI** on `127.0.0.1:8765`: new video / live, clip review, YouTube login, settings, assistant dashboard.
-- **Assistant (agent)**: keeps a queue of links, records live streams in 5-minute pieces, builds and reviews clips,
-  uploads on a schedule, pauses safely when a limit is hit, and sends alerts (in-app, ntfy, Telegram).
-- **Gemini failover**: several models, automatic switch on quota or errors, waits for the daily reset
-  (Pacific midnight, about 13:00 Pakistan time) instead of dropping work.
-- **Multi-channel**: one YouTube login per clip type, separate schedule and upload-limit pause per channel.
-- **Launch mode**: first uploads go out one hour apart, then the normal slots take over.
-- **Quality gates**: boring clips are dropped, wrong-game claims are filtered, titles and descriptions are validated,
-  clips are ranked so the best get the earliest slots.
-- **Credits**: descriptions credit the streamer by name, never with links.
-- **Safe mode**: stops every upload with one switch; nothing is lost.
+**Making clips**
+- Signal scan (audio, motion, scene cuts), Whisper transcription, Gemini vision judge with hard rules
+  (cutscenes, story spoilers, glitches/exploits, mods/cheats and menus are always rejected).
+- Automatic layout detection (gameplay area, webcam corner, chat/overlays) with a visual preview and manual crop.
+- Voice-over script writer with a code-side checker (numbers/dates the AI was not given are removed).
+- Local voices (Kokoro), optional Gemini voices, synthesised copyright-free background music, animated captions.
+- Streamer mode: webcam + gameplay layout, face close-ups for the judge, reaction scoring, clean sentence bounds.
+- Live mode: records a live stream in short pieces and clips every finished piece.
+- QA gates on the final mp4 (a clip that fails is never uploaded).
+
+**Publishing**
+- Two YouTube channels with separate logins, publish slots, daily caps and limit handling.
+- Schedule on the next free slot, or **upload now** (public immediately), per channel or for everything.
+- Publishing slots are written in Pakistan time (PKT) and converted for YouTube; launch mode for stream days.
+- Title/description/tags/thumbnail written by the AI, with credit to the streamer in the description.
+
+**Automation**
+- **Autopilot:** a links file, N voice-over + N streamer clips per day from the same video, quality check, scheduling.
+- **Assistant:** works the queue, reviews, approves, publishes, reads YouTube stats, retrains, cleans the disk, makes backups.
+- Notifications: in-app bell, phone push (ntfy.sh), Telegram, Gmail. Errors, finished links and "links running out" reminders.
+- Watchdog: restarts the program after a crash or a hang; starts on Windows login.
+- Safe mode: one switch that stops every upload and new job.
+
+**Learning**
+- Reads views/likes (and optionally watch time) from YouTube, keeps a separate playbook per channel, and feeds the
+  lessons into the script/title prompts. Suggests (or applies) better publish times.
+
+**Operations**
+- Web UI with Settings in one place, Memory (disk) tab, live activity log with Stop buttons, analytics, daily backups.
+- Free-tier friendly Gemini client: model fallback chain, per-model rate limits, cool-downs, quota display.
+  An OpenAI-compatible provider (Groq, OpenRouter, a paid OpenAI key…) can be used instead.
 
 ## Install (Windows)
 
-1. Python 3.11 or 3.12 (tick "Add to PATH").
-2. ffmpeg (full build): `winget install Gyan.FFmpeg`, then open a new terminal.
+1. **Python 3.11 or 3.12** from python.org (tick *Add to PATH*).
+2. **ffmpeg** (full build): `winget install Gyan.FFmpeg`, then open a new terminal.
 3. In the project folder:
-   ```
+   ```bat
    python -m venv .venv
    .venv\Scripts\activate
    pip install -r requirements.txt
    python -m featureclip init
    ```
-   (`setup_windows.bat` does the same.)
-4. Put your free key in `.env`: `GEMINI_API_KEY=...` (from https://aistudio.google.com/apikey).
+   (`setup_windows.bat` does all of this with one double-click.)
+4. Put your free Gemini key in `.env`: `GEMINI_API_KEY=...` (get one at https://aistudio.google.com/apikey).
 5. `python -m featureclip doctor --ping --whisper` and fix every FAIL line.
-   The first run downloads the Whisper model (~140 MB) and the Kokoro voice (~120 MB) once.
+   The first run downloads the Whisper model (~140 MB) and the Kokoro voice (~120 MB), once.
 
-## Run
+Linux/macOS also work from the command line (same steps with your shell's venv activation); the `.bat` helpers are Windows only.
 
+## Quick start
+
+```bat
+python -m featureclip ui          :: opens http://127.0.0.1:8765
 ```
-python -m featureclip ui            # web UI (or start_ui.bat)
-python -m featureclip run <source>  # one source, end to end
-python -m featureclip watch <live-url>
-python -m featureclip selftest      # whole pipeline on a synthetic video, no key or footage needed
-```
-
-In the UI, open **Assistant**, paste a link, pick the clip type and how many clips you want, and add it to the queue.
+1. **Settings → AI (Gemini):** paste your key.
+2. **YouTube tab:** choose `client_secret.json` (see below), then log in once per channel.
+3. **New video:** paste a video link, choose *Voice-over* or *Streamer*, enter how many clips, press **Make clips**.
+4. **Clips:** review the result. Or switch the **Assistant** on and let it approve and schedule.
 
 ### YouTube setup (one time)
+Google Cloud Console → new project → enable **YouTube Data API v3** → OAuth consent screen (External, add your own email as a
+test user) → create an **OAuth client ID of type Desktop app** → download the JSON and pick it in the YouTube tab.
+Each channel has its own *YouTube login* button; choose the Google account/channel for that clip type.
 
-1. Google Cloud Console: new project, enable **YouTube Data API v3**, OAuth consent screen (External, add your
-   accounts as test users), create an **OAuth client ID of type Desktop app**, save it as `client_secret.json` here.
-2. UI, **YouTube** tab: log in once per channel (voice-over channel, streamer-clips channel).
-3. Until Google audits your API project, YouTube may keep API uploads private and ignore the schedule; the tool
-   shows what YouTube actually applied. Channel avatar, banner and name are set in YouTube Studio.
+> Until Google audits your API project, YouTube may keep API uploads **private** and ignore the schedule. The assistant
+> tells you when that happens; you can then publish from YouTube Studio.
 
-### Useful settings
+## Autopilot
 
-| Setting | Meaning |
+Put one video link per line in `links.txt` (recorded videos only):
+
+```text
+# link | streamer name (optional) | webcam corner (optional)
+https://www.youtube.com/watch?v=XXXXXXXXXXX | Ducky Bhai
+https://www.youtube.com/watch?v=YYYYYYYYYYY
+```
+
+Turn on **Settings → Autopilot → enabled** and switch the **Assistant** on. Then, every day at `run_at` (default 09:00):
+
+1. the next link is taken (one per day by default; if the laptop was off, it catches up when it starts);
+2. the video is downloaded **once** and used twice: 5 voice-over clips and 5 streamer clips;
+3. each clip goes through the AI quality check; good ones are approved and scheduled on the next free slot of their channel;
+4. you get a notification with the result. If a link produces nothing it is retried once, then skipped with an error notice;
+5. when few links are left (default 3), when the last link is taken, and every day once none are left, you get a reminder.
+
+Live-stream links are skipped (record those from the Assistant/New video tabs). Training from YouTube results continues in the background.
+
+**Starting by itself after a reboot:** run `install_autostart.bat` once. It registers a Windows task that starts
+`start_ui_hidden.bat` (the watchdog) at login. It starts when you log in, not before, and the laptop must not be asleep.
+
+## The web UI (tabs)
+
+| Tab | What is there |
 |---|---|
-| `layout.mode` | default look: `hybrid`, `fill` or `streamer` (a source's chosen type overrides it) |
-| `layout.facecam` | webcam corner (`top-right`, ...) or `auto` |
-| `streamer.top_ratio`, `streamer.clip_min/max`, `streamer.min_reaction` | streamer look, length and reaction strictness |
-| `schedule.slots`, `schedule.launch_gap_minutes` | publish times and launch spacing |
-| `assistant.piece_minutes`, `assistant.stock_target` | live piece length, how many clips to keep ready |
-| `channels.streamer.name`, `branding.name` | channel names used in descriptions |
+| 🤖 **Assistant** | animated robot showing what the assistant is doing right now, steps, live log and decisions, on/off, Safe mode, Launch mode, Autopilot status and link box, the link queue (with Stop) |
+| 🎬 **New video** | make clips from one video or a live stream, layout preview and crop editor |
+| 🎞 **Clips** | every clip with video, title, description, thumbnail, AI review; approve, reject, rebuild, regenerate text |
+| ▶️ **YouTube** | per channel: login, **Upload now** and **Schedule on available slots**; all-channels buttons; slots and scheduled videos; one-time Google setup |
+| 📜 **Activity / Log** | every job with its live log, ⏹ Stop per job, **Stop everything** |
+| 📈 **Analytics** | results by category and publish time, learning playbooks per channel, Gemini usage, free quota |
+| 🧠 **Memory** | disk usage; delete **clip files** or **work files** (the data stays); smart cleanup; backups |
+| ⚙️ **Settings** | every setting in one place, in sections, one Save button; tools: self-test, Gemini test, system check, voice lab |
+
+## Two channels, two clip types
+
+The clip type is chosen per link (and per Autopilot run), so you only set it up once: log in the voice-over channel and
+the streamer channel in the YouTube tab, and every clip is uploaded to the right one with its own slots and caps.
+
+## Configuration
+
+Settings live in `config.yaml` (created by `init`; edited through the Settings tab, a copy is kept as `config.yaml.bak`).
+Secrets live in `.env` and never in `config.yaml`. Defaults and comments: `featureclip/config.py`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `assistant.enabled` / `assistant.mode` | off / `auto` | `auto` approves and schedules by itself, `ask` only reviews |
+| `autopilot.enabled` | off | work through the links file |
+| `autopilot.run_at`, `links_per_day` | `09:00`, `1` | when and how many links per day |
+| `autopilot.voiceover_clips`, `streamer_clips` | `5`, `5` | clips per link and type |
+| `autopilot.warn_links_left` | `3` | reminder threshold |
+| `schedule.slots` | `21:00, 01:00, 05:00` | publish times, **Pakistan time** |
+| `schedule.max_ahead_days` | `3` | how far ahead slots are filled |
+| `upload.privacy` | `private` | `private` / `unlisted` / `public` (start with private) |
+| `upload.max_per_day` | `3` | daily upload cap per channel when not scheduling |
+| `streamer.min_reaction` | `45` | minimum reaction score (0–100) for streamer clips |
+| `streamer.quality_floor` | `62` | minimum interest score for streamer clips |
+| `streamer.audio_delay` | `0.0` | seconds to delay the streamer's audio if it ever runs ahead of the picture |
+| `layout.mode` | `fill` | `fill`, `hybrid` or `streamer` |
+| `cleanup.max_work_gb` | `20` | hard limit of the work folder |
+| `backup.every_hours`, `backup.keep` | `24`, `7` | automatic backups |
+| `llm.provider` | `gemini` | or an OpenAI-compatible provider for a paid key |
+
+`.env`: `GEMINI_API_KEY`, optional `GEMINI_MODELS`, `OPENAI_COMPAT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `NOTIFY_EMAIL_PASSWORD`.
+
+## Command line
+
+```bat
+python -m featureclip <command> [--root PATH] [--config FILE]
+```
+
+| Command | Purpose |
+|---|---|
+| `init` | create `config.yaml` and `.env` from the examples |
+| `doctor [--ping] [--whisper]` | check the installation (`--ping` tests the Gemini key) |
+| `selftest` | run the whole pipeline on a synthetic video (no key, no footage needed) |
+| `ui` | start the web UI at http://127.0.0.1:8765 |
+| `run <video link or file>` | scan → judge → build for one video |
+| `scan`, `judge`, `build` | the same, one stage at a time |
+| `watch <id> --url <live url>` | record a live stream in pieces and clip each piece |
+| `layout <video> --out layout.png` | draw the detected gameplay area on a frame |
+| `list`, `approve`, `upload [--dry-run]` | review and publish from the terminal |
+| `daily <video>` | run a source then upload approved clips (Task Scheduler friendly) |
+| `rejudge`, `retry` | redo judging or rebuild a clip with the newest rules |
+| `backup`, `restore <zip>` | save / restore the database and settings (close the program before restoring) |
+| `tidy [--yes]` | list (or delete) files the program does not need; `python tidy.py` works without installing anything |
+| `python -m featureclip.supervisor --root .` | run the UI + assistant under the watchdog |
+
+Windows helpers: `start_ui_hidden.bat` / `start_watchdog.bat` (watchdog), `start_live.bat`, `install_autostart.bat`,
+`remove_autostart.bat`, `tidy.bat`.
+
+## Reliability and safety
+
+- **Watchdog** restarts the app on a crash, an unresponsive UI, or a stuck job (no heartbeat for 20 minutes) and tells you.
+- **Safe mode** stops all uploads and new work with one click; it can also pull scheduled videos back to private.
+- **Stop** buttons kill the running ffmpeg/job at the next step; finished data is kept.
+- **Disk protection:** a size cap for the work folder, automatic cleanup of used files, live recording pauses when the disk is almost full.
+- **YouTube limits:** upload-limit and quota errors pause that channel for a few hours instead of failing clips.
+- **Hard content rules** in code (see *Features*), and an AI review of every clip before it can be approved.
+- **Settings** are saved atomically; a backup of the database and settings is made every 24 hours.
+- **Secrets:** `.env`, `client_secret.json`, `token*.json` and `cookies.txt` stay on your machine. They are in `.gitignore`; never commit them.
+
+## Data, backups and disk space
+
+| Location | Content |
+|---|---|
+| `data/featureclip.db` | clips, titles, stats, learning, queue, autopilot state (SQLite) |
+| `data/backups/` | zip backups (database + settings) |
+| `work/` | downloads, live recordings, caches (can be deleted, re-created when needed) |
+| `output/` | finished clips and thumbnails (the **Memory** tab can delete the files and keep the data) |
+| `config.yaml`, `.env`, `links.txt` | your settings, secrets, autopilot links |
+
+Restore: close the program, then `python -m featureclip restore data\backups\<file>.zip`.
+
+## Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| `ModuleNotFoundError: yaml` (or any module) | you are not in the environment where `pip install -r requirements.txt` was run; activate it first |
+| 0 clips from a streamer video | the AI found no clear reaction; lower `streamer.min_reaction` a little, or use a video with more laughing/screaming |
+| Gemini 429 / quota | the tool switches models by itself; see Analytics → Free quota. Quota resets at midnight Pacific time |
+| YouTube keeps uploads private | your Google project is not audited yet; publish from YouTube Studio (the assistant notifies you) |
+| yt-dlp bot / 429 errors | put a `cookies.txt` in the project folder or set the browser cookie option in Settings → Download |
+| Voice slightly ahead of the picture on streamer clips | set `streamer.audio_delay` to e.g. `0.3` and send a log if it persists |
+| UI shows old settings | press **Save all settings**; settings are only written on Save |
+| Disk full | Memory tab → delete work files / clip files |
+
+## Tests
+
+```bat
+pip install -r requirements.txt
+python -m pytest -q --ignore=tests/test_live.py
+```
+About 170 tests; they need no internet and no API key (a fake Gemini server and a fake YouTube client are used). The
+full-pipeline tests render real video with ffmpeg and take several minutes. `tests/test_live.py` needs a real live stream.
 
 ## Project layout
 
 ```
-featureclip/            pipeline, judge, narrate, compose, layout, live, uploader, agent, channels, web/
-featureclip/web/        FastAPI backend + single-page UI (vanilla JS)
-tests/                  pytest suite (real ffmpeg renders on synthetic video)
-config.example.yaml     all settings with comments
-sources.example.yaml    example sources
+featureclip/
+  pipeline.py      the stages (scan, judge, build, review, upload), resumable
+  agent.py         the assistant loop (queue, review, publish, learn, housekeeping)
+  autopilot.py     links file, one link per day, reminders
+  judge.py, signals.py, candidates.py, layout.py, ai_layout.py   finding and judging moments
+  transcribe.py, narrate.py, tts.py, music.py, captions.py, compose.py, qa.py, bounds.py   building the clip
+  metadata.py, uploader.py, schedule.py, launch.py, quota.py, channels.py                 publishing
+  learn.py, insights.py, styles.py        learning from YouTube results
+  llm.py, llm_limits.py                   Gemini (and OpenAI-compatible) client, fallbacks, limits
+  live.py          live recording in pieces
+  supervisor.py, heartbeat.py, safe.py, cleanup.py, backup.py, memory.py, notify.py   reliability
+  web/             FastAPI app, job manager, settings store, single-page UI (static/index.html)
+tests/             pytest suite
+tools/             make_test_video.py (synthetic test stream)
+config.example.yaml, .env.example, links.txt.example
 ```
 
-Run the tests: `python -m pytest tests -q --ignore=tests/test_live.py`.
+## Known limits
 
-## Status and limits
+- Tested on synthetic streams and mocked services; behaviour on very long real streams, real YouTube logins and a real
+  Windows hang is only as good as the first real runs. Read the first days' logs.
+- Autopilot handles **recorded** videos; live links are skipped.
+- Gemini's free tier has small daily limits for the smarter models; the tool uses the high-limit Flash-Lite models first.
+- Facecam/gameplay detection can be wrong for unusual layouts; use the layout preview and the crop fields.
+- Twitch chat signals are not supported.
+- Windows is the supported platform for the helper scripts.
 
-- Built and tested on synthetic video and real live runs on a Windows laptop. The streamer mode and the two-channel
-  upload path have a full automated test suite but are new; check the first clips before trusting them.
-- The webcam in streamer clips is a small part of the stream, so it is enlarged and can look soft.
-- Free quotas apply: Gemini models have daily request limits and YouTube limits uploads per channel per day.
-- Never commit `.env`, `client_secret.json`, `token*.json` or the `data/` folder.
+## Copyright and platform rules (read this)
 
-## Responsible use
+- A voice-over does **not** make footage copyright-free. The footage belongs to the game publisher and the streamer.
+  Use it only with the streamer's permission, which is necessary but not sufficient.
+- Publishers' fan-content policies are often **non-commercial**. Monetizing game footage can lead to claims, takedowns,
+  demonetization or strikes. Read the current policy yourself and consider asking the publisher for explicit permission.
+- YouTube's reused/inauthentic-content rules require real added value in each Short. Do not post many near-identical clips;
+  keep the daily cap low and vary the content.
+- Streamer clips use the streamer's own audio and always credit the streamer in the description. Get their permission.
+- This tool deliberately contains no tricks to avoid Content ID or copy detection.
 
-Use only footage you have the right to use, such as your own streams or content whose creator has agreed to clips.
-Credit creators, follow YouTube's policies and the game publisher's content rules, and check them before you
-rely on the channel for income. The tool credits the streamer by name and adds no links.
+## License
+
+No license has been chosen yet. Add a `LICENSE` file (for example MIT) before making the repository public if you want others to use it.

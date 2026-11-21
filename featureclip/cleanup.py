@@ -21,6 +21,11 @@ def free_gb(path: Path) -> float:
         return 999.0
 
 
+def disk_critical(cfg, path: Path) -> bool:
+    """Too little space to keep recording safely (the live recorder pauses until cleanup frees some)."""
+    return free_gb(path) < float(cfg.get("cleanup.stop_free_gb", 1.5))
+
+
 def _size(p: Path) -> int:
     try:
         if p.is_file():
@@ -43,7 +48,9 @@ def _rm(p: Path) -> None:
 def run(cfg, store, dry_run: bool = False) -> dict:
     work, out = cfg.path("paths.workdir"), cfg.path("paths.output")
     now = time.time()
-    low = free_gb(work) < float(cfg.get("cleanup.min_free_gb", 4))
+    work_gb = _size(work) / 1e9 if work.is_dir() else 0.0
+    over_cap = work_gb > float(cfg.get("cleanup.max_work_gb", 20))       # hard limit for the work folder
+    low = free_gb(work) < float(cfg.get("cleanup.min_free_gb", 4)) or over_cap
     raw_age = (0.25 if low else float(cfg.get("cleanup.raw_hours", 12))) * 3600
     keep_out = (1 if low else float(cfg.get("cleanup.keep_output_days", 7))) * 86400
     todo: list[tuple[Path, str]] = []
@@ -119,4 +126,4 @@ def run(cfg, store, dry_run: bool = False) -> dict:
             _rm(p)
     after = free_gb(work)
     return {"freed_mb": round(freed / 1e6, 1), "files": len(items), "items": items[:50], "dry_run": dry_run,
-            "free_gb": round(after, 1), "low_disk": low}
+            "free_gb": round(after, 1), "low_disk": low, "work_gb": round(work_gb, 1), "over_cap": over_cap}

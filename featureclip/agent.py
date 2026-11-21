@@ -17,7 +17,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import channels, metadata, schedule
+from . import channels, heartbeat, metadata, schedule
 from .config import load_config
 from .ffutil import grab_frame, probe
 from .llm import LLM, LLMError
@@ -205,6 +205,14 @@ class Assistant:
                 else:
                     store.update_agent_source(s["id"], status="error", finished=time.time(),
                                               note="interrupted 3 times; add the link again if it is still wanted")
+            wd = self.root / "data" / "watchdog_last.json"
+            if wd.is_file():
+                try:
+                    why = json.loads(wd.read_text(encoding="utf-8")).get("reason", "")
+                    wd.unlink()
+                    Notifier(cfg, store).send("warn", "The watchdog restarted the program", f"Reason: {why}. Interrupted links were queued again.")
+                except Exception:
+                    pass
             if resumed and cfg.get("assistant.enabled", False):
                 Notifier(cfg, store).send("info", "Assistant resumed after a restart",
                                           f"{resumed} interrupted link(s) were put back in the queue.")
@@ -216,6 +224,7 @@ class Assistant:
 
     def _phase(self, key: str | None, text: str = "") -> None:
         """What the assistant itself is doing right now (shown live in the dashboard)."""
+        heartbeat.beat()
         cur = self.state.get("phase") or {}
         since = cur.get("since", time.time()) if cur.get("key") == key else time.time()
         self.state["phase"] = {"key": key, "text": text, "since": since} if key else None
@@ -233,8 +242,24 @@ class Assistant:
             except Exception as e:
                 self.state["tick_error"] = f"{type(e).__name__}: {e}"
                 traceback.print_exc()
+                self._notify_tick_error(self.state["tick_error"])
             self._wake.wait(every)
             self._wake.clear()
+
+    def _notify_tick_error(self, text: str) -> None:
+        """An unexpected crash inside the assistant: tell the owner (at most once an hour)."""
+        try:
+            if time.time() - getattr(self, "_last_err_notify", 0) < 3600:
+                return
+            self._last_err_notify = time.time()
+            cfg = load_config(self.config_path, root=self.root)
+            store = Store(cfg.path("paths.db"))
+            try:
+                Notifier(cfg, store).send("error", "Assistant hit an error", text[:300] + "\nIt keeps retrying every minute.")
+            finally:
+                store.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ one pass
     def tick(self, cfg=None) -> None:
@@ -245,6 +270,7 @@ class Assistant:
         if not self._busy.acquire(blocking=False):
             return
         store = Store(cfg.path("paths.db"))
+        heartbeat.set_busy(True)
         try:
             self.state["tick_error"] = ""
             notifier = Notifier(cfg, store)
@@ -254,6 +280,12 @@ class Assistant:
             pipe = Pipeline(cfg, store, load_all_sources(self.root))
             self.state.update(state="working", message="Checking sources, reviewing clips, publishing ...")
             safe_on = safe.is_on(store)
+            try:
+                from . import autopilot
+                autopilot.tick(cfg, store, notifier)
+            except Exception as e:
+                traceback.print_exc()
+                notifier.send("error", "Autopilot problem", f"{type(e).__name__}: {str(e)[:200]}")
             self._phase("source", "Looking at the link queue")
             self._sources(cfg, store, notifier, safe_on)
             self._phase("scan", "Finishing unfinished clips")
@@ -267,12 +299,6 @@ class Assistant:
             self._learn(cfg, store, notifier)
             self._phase("clean", "Cleaning old files")
             self._housekeeping(cfg, store, notifier)
-            try:
-                from . import extras
-                extras.first_comments(cfg, store)
-                extras.weekly_report(cfg, store, notifier)
-            except Exception:
-                traceback.print_exc()
             self._phase(None)
             self._stock(cfg, store, notifier)
             msg = self._summary(store)
@@ -280,6 +306,7 @@ class Assistant:
                 msg = "SAFE MODE ON (" + (safe.info(store)["reason"] or "no reason given") + "). " + msg
             self.state.update(state="idle", message=msg, last_tick=time.time())
         finally:
+            heartbeat.set_busy(False)
             self._phase(None)
             store.close()
             self._busy.release()
@@ -554,16 +581,31 @@ class Assistant:
             notifier.send("info", "Better publish time found", f"{sg['reason']} Open the Assistant tab to apply it.")
 
     # ------------------------------------------------------------------ disk cleanup
+    def _backup(self, cfg, store, notifier) -> None:
+        if not cfg.get("backup.enabled", True):
+            return
+        from . import backup
+        if not backup.due(cfg, float(store.kv_get("backup_ts", "0") or 0)):
+            return
+        store.kv_set("backup_ts", str(time.time()))
+        try:
+            f = backup.run(cfg)
+            self._event("info", f"backup saved: {f.name}")
+        except Exception as e:
+            notifier.send("warn", "Backup failed", f"{type(e).__name__}: {str(e)[:200]}")
+
     def _housekeeping(self, cfg, store, notifier) -> None:
+        self._backup(cfg, store, notifier)
         if not cfg.get("cleanup.enabled", True):
             return
-        low = cleanup.free_gb(cfg.path("paths.workdir")) < float(cfg.get("cleanup.min_free_gb", 4))
+        low = (cleanup.free_gb(cfg.path("paths.workdir")) < float(cfg.get("cleanup.min_free_gb", 4))
+               or cleanup.disk_critical(cfg, cfg.path("paths.workdir")))
         last = float(store.kv_get("cleanup_ts", "0") or 0)
         if time.time() - last < (600 if low else 1800):
             return
         store.kv_set("cleanup_ts", str(time.time()))
         r = cleanup.run(cfg, store)
-        store.kv_set("cleanup_last", json.dumps({k: r[k] for k in ("freed_mb", "files", "free_gb", "low_disk")} | {"ts": time.time()}))
+        store.kv_set("cleanup_last", json.dumps({k: r[k] for k in ("freed_mb", "files", "free_gb", "low_disk", "work_gb")} | {"ts": time.time()}))
         if r["low_disk"] and r["free_gb"] < float(cfg.get("cleanup.min_free_gb", 4)):
             if time.time() - float(store.kv_get("lowdisk_ts", "0") or 0) > 6 * 3600:
                 store.kv_set("lowdisk_ts", str(time.time()))
