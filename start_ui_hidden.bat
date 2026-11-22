@@ -1,5 +1,5 @@
 @echo off
-REM Login par khud chalne wala version: browser nahi kholta, crash ya hang par watchdog restart karta hai.
 cd /d "%~dp0"
-call .venv\Scripts\activate.bat
+if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
+python -c "import yaml, fastapi" >nul 2>nul || (echo Packages install ho rahe hain, thora intezar karo... & python -m pip install -r requirements.txt)
 python -m featureclip.supervisor --root .

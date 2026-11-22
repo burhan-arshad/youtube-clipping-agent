@@ -14,7 +14,10 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 DEFAULT_SLOTS = ["21:00", "01:00", "05:00"]
-PKT = ZoneInfo("Asia/Karachi")
+try:
+    PKT = ZoneInfo("Asia/Karachi")
+except Exception:                      # Windows without tzdata: Pakistan has no daylight saving, so a fixed UTC+5 is exact
+    PKT = timezone(timedelta(hours=5), "PKT")
 
 
 def parse_slots(value) -> list[tuple[int, int]]:
@@ -34,7 +37,13 @@ def audience_times(slot_pkt: tuple[int, int]) -> dict[str, str]:
     base = datetime(now.year, now.month, now.day, slot_pkt[0], slot_pkt[1], tzinfo=PKT)
     zones = {"UK": "Europe/London", "Europe (CET)": "Europe/Paris", "US East": "America/New_York",
              "US West": "America/Los_Angeles"}
-    return {n: base.astimezone(ZoneInfo(z)).strftime("%H:%M") for n, z in zones.items()}
+    out = {}
+    for n, z in zones.items():
+        try:
+            out[n] = base.astimezone(ZoneInfo(z)).strftime("%H:%M")
+        except Exception:                      # no tz database: skip that audience instead of crashing
+            pass
+    return out
 
 
 def next_slots(now: datetime, n: int, slots: list[tuple[int, int]], taken: list[datetime] | None = None,

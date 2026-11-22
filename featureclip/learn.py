@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import channels, insights
+from . import insights
 
 MIN_CLIPS = 6          # published clips with stats before anything is learned
 SHRINK = 3.0           # a feature with n clips counts n / (n + SHRINK) of its own average
@@ -41,12 +41,10 @@ def _bucket(x: float, edges: list[tuple[float, str]], last: str) -> str:
     return last
 
 
-def _rows(store, cfg, key: str | None = None) -> list[dict]:
+def _rows(store, cfg) -> list[dict]:
     base = {r["id"]: r for r in insights.clip_rows(store, float(cfg.get("insights.min_age_hours", 12)))}
     rows = []
     for c in store.clips(status="uploaded"):
-        if key is not None and channels.key_of_clip(c) != key:        # each channel learns from its own audience only
-            continue
         r = base.get(c["id"])
         if not r:
             continue
@@ -83,10 +81,10 @@ def _score(rows: list[dict]) -> None:
         r["score"] = round(tot / wsum, 1) if wsum else 50.0
 
 
-def build(store, cfg, key: str | None = "voiceover") -> dict:
-    rows = _rows(store, cfg, key)
+def build(store, cfg) -> dict:
+    rows = _rows(store, cfg)
     analytics = any(r["pct"] is not None for r in rows)
-    out = {"ts": time.time(), "channel": key, "clips": len(rows), "need": MIN_CLIPS, "analytics": analytics, "features": [],
+    out = {"ts": time.time(), "clips": len(rows), "need": MIN_CLIPS, "analytics": analytics, "features": [],
            "best": [], "worst": [], "playbook": ""}
     if len(rows) < MIN_CLIPS:
         return out
@@ -131,31 +129,25 @@ def _playbook(rep: dict) -> str:
     return "\n".join(lines)[:700]
 
 
-def _kv(key: str) -> str:
-    return "playbook" if key == "voiceover" else f"playbook:{key}"      # the voice-over key keeps its old name
+def refresh(store, cfg) -> dict:
+    """Retrain the playbook on the newest numbers."""
+    out = build(store, cfg)
+    store.kv_set("playbook", json.dumps(out))
+    return out
 
 
-def refresh(store, cfg, key: str | None = None) -> dict:
-    """Retrain one channel (or both). Returns the voice-over report for old callers."""
-    out = {}
-    for k in ([key] if key else list(channels.KEYS)):
-        out[k] = build(store, cfg, k)
-        store.kv_set(_kv(k), json.dumps(out[k]))
-    return out.get("voiceover") or next(iter(out.values()))
-
-
-def load(store, key: str = "voiceover") -> dict:
+def load(store) -> dict:
     try:
-        return json.loads(store.kv_get(_kv(key), "") or "null") or {}
+        return json.loads(store.kv_get("playbook", "") or "null") or {}
     except Exception:
         return {}
 
 
-def playbook_text(store, cfg, key: str = "voiceover") -> str:
+def playbook_text(store, cfg) -> str:
     """Text for the writers' prompts ('' while there is too little data or the feature is switched off)."""
     if not cfg.get("learn.use_playbook", True):
         return ""
     try:
-        return str(load(store, key).get("playbook") or "")
+        return str(load(store).get("playbook") or "")
     except Exception:
         return ""

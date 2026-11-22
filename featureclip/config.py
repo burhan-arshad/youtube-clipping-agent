@@ -197,13 +197,6 @@ DEFAULTS: dict[str, Any] = {
         "manage_videos": False,           # True = lets safe mode pull scheduled videos back to private (sign in again)
     },
     "insights": {"min_samples": 3, "min_age_hours": 12, "refresh_hours": 3},
-    "streamer": {                    # layout.mode "streamer": webcam on top, gameplay below, the streamer's own voice
-        "top_ratio": 0.36, "game_aspect": 1.2, "captions": True,
-        "clip_min": 20, "clip_max": 45, "audio_delay": 0.0, "smart_bounds": True,   # streamer clips: long enough for set-up + reaction
-        "quality_floor": 62, "min_reaction": 45,              # stricter than voice-over clips: the streamer's own voice must carry the clip
-    },
-    # one YouTube login per kind of clip: voice-over clips use upload.token, streamer clips their own channel
-    "channels": {"streamer": {"token": "token_streamer.json", "name": ""}, "voiceover": {"name": ""}},
     "learn": {"use_playbook": True},      # the script/title writers get the channel playbook learned from YouTube results
     "cleanup": {
         "enabled": True,
@@ -214,7 +207,7 @@ DEFAULTS: dict[str, Any] = {
         "stop_free_gb": 1.5,              # live recording pauses when the disk has less than this free
     },
     "autopilot": {"enabled": False, "links_file": "links.txt", "run_at": "09:00", "links_per_day": 1,
-                  "voiceover_clips": 5, "streamer_clips": 5, "warn_links_left": 3},
+                  "voiceover_clips": 5, "warn_links_left": 3},
     "backup": {"enabled": True, "every_hours": 24, "keep": 7, "include_secrets": False},
     "watchdog": {"stale_minutes": 20},
     "safe": {"auto": True, "fail_streak": 3, "reject_streak": 8},

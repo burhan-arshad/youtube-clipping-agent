@@ -37,10 +37,8 @@ def turn_off(store) -> None:
 
 
 def _set(setter, cfg, clip, *args):
-    """set_visibility with the login of the channel the clip lives on."""
-    from . import channels
-    with channels.use(cfg, channels.key_of_clip(clip)):
-        return setter(cfg, clip["youtube_id"], *args)
+    """set_visibility for one clip."""
+    return setter(cfg, clip["youtube_id"], *args)
 
 
 def pull_back(cfg, store, setter=None) -> dict:

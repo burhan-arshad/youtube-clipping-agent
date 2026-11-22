@@ -108,7 +108,7 @@ def parse(raw: dict, fw: int, fh: int, pad: float = 0.012) -> tuple[Box, list[Bo
         return None
     ins = 0.004                                   # trim a hair so compression halos stay out
     rect = (gx0 + ins, gy0 + ins, gx1 - ins, gy1 - ins)
-    overlays, kinds, cam = [], [], None
+    overlays, kinds = [], []
     for o in raw.get("overlays") or []:
         b = _box(o.get("box") if isinstance(o, dict) else None)
         if b is None:
@@ -122,14 +122,12 @@ def parse(raw: dict, fw: int, fh: int, pad: float = 0.012) -> tuple[Box, list[Bo
             continue
         overlays.append((x0, y0, x1, y1))
         kinds.append(str(o.get("kind", "other")))
-        if str(o.get("kind", "")).lower() == "facecam" and cam is None:
-            cam = (x0, y0, x1, y1)
 
     def px(x0, y0, x1, y1) -> Box:
         return (_even(x0 * fw), _even(y0 * fh), _even((x1 - x0) * fw), _even((y1 - y0) * fh))
 
     return px(*rect), [px(*b) for b in overlays], {"kinds": kinds, "type": raw.get("layout_type", ""),
-                                                  "notes": raw.get("notes", ""), "cam": px(*cam) if cam else None}
+                                                  "notes": raw.get("notes", "")}
 
 
 def detect(llm, video: str | Path, duration: float, frame_w: int, frame_h: int,
@@ -165,4 +163,4 @@ def detect(llm, video: str | Path, duration: float, frame_w: int, frame_h: int,
         return None
     rect, avoid, info = out
     print(f"[layout] AI says: {info['type'] or '?'} - {info['notes']} | overlays: {info['kinds'] or 'none'}")
-    return Layout(frame_w, frame_h, rect, avoid, "ai", info.get("cam"))
+    return Layout(frame_w, frame_h, rect, avoid, "ai")

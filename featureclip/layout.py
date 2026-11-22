@@ -29,18 +29,15 @@ class Layout:
     rect: Box
     avoid: list[Box] = field(default_factory=list)
     origin: str = "auto"  # auto | manual | full
-    cam: Box | None = None   # the streamer's webcam (used by the "streamer" layout: webcam on top, gameplay below)
 
     def to_dict(self) -> dict:
         return {"frame": [self.frame_w, self.frame_h], "rect": list(self.rect),
-                "avoid": [list(b) for b in self.avoid], "origin": self.origin,
-                "cam": list(self.cam) if self.cam else None}
+                "avoid": [list(b) for b in self.avoid], "origin": self.origin}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Layout":
-        cam = d.get("cam")
         return cls(d["frame"][0], d["frame"][1], tuple(d["rect"]), [tuple(b) for b in d.get("avoid", [])],
-                   d.get("origin", "auto"), tuple(cam) if cam else None)
+                   d.get("origin", "auto"))
 
 
 # ------------------------------------------------------------------ frame sampling
@@ -342,30 +339,3 @@ def draw_debug(frame: np.ndarray, layout: Layout, crop: Box | None) -> np.ndarra
     if crop:
         r(crop, (0, 255, 255), 4)
     return frame
-
-
-def find_cam(L: Layout, video, duration: float, facecam: str = "auto",
-             facecam_size: tuple[float, float] = (0.27, 0.38)) -> Box | None:
-    """The webcam box for the streamer layout: the one the AI marked, a corner the owner configured, or a face
-    that stays in a corner of the picture. None when the stream has no webcam."""
-    if L.cam:
-        return L.cam
-    facecam = (facecam or "auto").lower()
-    if facecam == "none":
-        return None
-    if facecam in CORNERS:
-        return corner_box(facecam, L.frame_w, L.frame_h, facecam_size)
-    try:
-        times = list(np.linspace(duration * 0.1, duration * 0.9, 12)) if duration > 10 else [duration / 2]
-        frames = sample_frames(video, times, 640)
-        if len(frames) < 4:
-            return None
-        sh, sw = frames[0].shape[:2]
-        sx, sy = L.frame_w / sw, L.frame_h / sh
-        found = find_faces([cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames], sw)
-        if found:
-            b = found[0]
-            return (_even(b[0] * sx), _even(b[1] * sy), _even(b[2] * sx), _even(b[3] * sy))
-    except Exception:
-        pass
-    return None

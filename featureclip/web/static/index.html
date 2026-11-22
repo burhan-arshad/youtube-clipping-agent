@@ -225,9 +225,14 @@ async function api(path, opts = {}) {
   const r = await fetch(path, o);
   let data = null;
   try { data = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error((data && (data.detail || data.message)) || r.statusText);
+  if (!r.ok) {
+    if ((r.status === 404 || r.status === 405) && !(data && data.detail && data.detail !== "Not Found" && data.detail !== "Method Not Allowed"))
+      throw new Error("The running program is older than this page. Close featureclip completely (all black windows, or end python in Task Manager) and start it again.");
+    throw new Error((data && (data.detail || data.message)) || r.statusText);
+  }
   return data;
 }
+const UI_REV = 35;
 function toast(msg, kind="") {
   const d = document.createElement("div");
   d.className = "toast " + kind; d.textContent = msg;
@@ -351,9 +356,8 @@ function viewCreate() {
      Open Settings and paste your key (free: aistudio.google.com/apikey).
      <div class="actions"><button class="btn primary" id="goSet">Open Settings</button></div></div>` : ""}
   <div class="card"><h2>What should be made?</h2>
-    <div class="grid2" style="gap:10px"><div><label>Clip type (required)</label><select id="mkMode"><option value="">— choose —</option><option value="voiceover">Voice-over clips (AI script + voice)</option><option value="streamer">Streamer clips (webcam on top, own voice)</option></select></div>
-      <div><label>How many clips? (required)</label><input type="number" id="mkClips" min="1" max="50" placeholder="e.g. 5"></div></div>
-    <p class="help">Streamer clips keep the streamer's own voice and go to the streamer channel; voice-over clips go to the voice-over channel (set both in the YouTube tab).</p></div>
+    <div><label>How many clips? (required)</label><input type="number" id="mkClips" min="1" max="50" placeholder="e.g. 5"></div>
+    <p class="help">Voice-over clips (AI script and voice) go to your channel.</p></div>
   <div class="grid2">
     <div class="card">
       <h2>Recorded video</h2>
@@ -390,10 +394,8 @@ function viewCreate() {
     try { const r = await api("/api/pick", {method: "POST", body: {kind: "file"}}); if (r.path) $("#video").value = r.path; }
     catch (e) { toast(e.message, "bad"); }
   };
-  const vals = () => ({video: $("#video").value, streamer: $("#streamer").value, credit_url: $("#credit").value, ...adjBody(),
-    mode: $("#mkMode").value, clips: +$("#mkClips").value || 0});
-  const need = () => { if (!$("#mkMode").value) { toast("Choose the clip type first: voice-over or streamer", "bad"); return false; }
-    if (!(+$("#mkClips").value > 0)) { toast("Enter how many clips you want", "bad"); return false; } return true; };
+  const vals = () => ({video: $("#video").value, streamer: $("#streamer").value, credit_url: $("#credit").value, ...adjBody(), clips: +$("#mkClips").value || 0});
+  const need = () => { if (!(+$("#mkClips").value > 0)) { toast("Enter how many clips you want", "bad"); return false; } return true; };
   wireAdjust(() => $("#video").value, () => $("#liveUrl").value);
   $("#runBtn").onclick = () => need() && startJob({kind: "run", ...vals()}, "#log", "#jobStatus", j => {
     if (j.status === "done") { toast("Clips are ready! Open the Clips tab.", "ok"); renderNav(); } });
@@ -422,7 +424,7 @@ async function viewClips() {
   const draw = async () => {
     if (tab !== "clips") return;
     $("#chips").innerHTML = filters.map(([k, n]) => `<span class="chip ${clipFilter===k?'on':''}" data-f="${k}">${n}</span>`).join("") +
-      (clipFilter === "ready" ? `<span class="chip" id="apAll" style="margin-left:auto">✔ Approve all ready</span>` : "");
+      (clipFilter === "ready" ? `<span class="chip" id="apAll">✔ Approve all ready</span>` : "");
     $("#chips").querySelectorAll(".chip[data-f]").forEach(c => c.onclick = () => { clipFilter = c.dataset.f; draw(); });
     if ($("#apAll")) $("#apAll").onclick = async () => { const r = await api("/api/clips/approve-all", {method: "POST"}); toast(`${r.approved} clips approved`, "ok"); refreshState(); draw(); };
     const list = await api("/api/clips?status=" + clipFilter);
@@ -673,19 +675,15 @@ function fieldHtml(f) {
 // ------------------------------------------------------------------ YOUTUBE
 function viewYoutube() {
   const approved = (S.counts && S.counts.approved) || 0;
-  const chans = Object.entries(S.channels || {});
-  $("#main").innerHTML = `<h1>YouTube</h1><p class="sub">Login for both channels, and upload each channel's approved clips: right now, or into the next free publish slots.</p>
-  <div class="grid2">${chans.map(([k, ch]) => `<div class="card"><h2>${k === "streamer" ? "🎭" : "🎙"} ${esc(ch.label)}${ch.name ? " — " + esc(ch.name) : ""}</h2>
-      <div class="help" style="margin-top:0">${k === "streamer" ? "Streamer clips (webcam + the streamer's own voice)." : "Voice-over clips (AI script and voice)."}</div>
-      <div class="kv" style="margin:10px 0"><b>Login</b><span>${ch.logged_in ? "✅ logged in" : "❌ not logged in"}</span><b>Approved, waiting</b><span>${ch.approved}</span></div>
-      <div class="actions" style="margin-top:6px">
-        <button class="btn primary" data-up="${k}" data-now="1" ${ch.logged_in && ch.approved ? "" : "disabled"}>🚀 Upload now (public)</button>
-        <button class="btn good" data-up="${k}" ${ch.logged_in && ch.approved ? "" : "disabled"}>🗓 Schedule on available slots</button></div>
-      <div class="actions" style="margin-top:8px"><button class="btn sm" data-login="${k}" ${S.client_secret ? "" : "disabled"}>${ch.logged_in ? "Log in again" : "YouTube login"}</button>
-        ${ch.logged_in ? `<button class="btn sm danger" data-logout="${k}">Logout</button>` : ""}<button class="btn sm" data-dry="${k}" ${ch.approved ? "" : "disabled"}>Dry run</button></div></div>`).join("")}</div>
-  <div class="card"><h2>All channels together</h2><div class="kv"><b>Approved clips</b><span>${approved}</span><b>Privacy</b><span>${esc(S.privacy)} <span class="help">(Settings → YouTube upload)</span></span></div>
-    <div class="actions"><button class="btn primary" id="upNowAll" ${approved ? "" : "disabled"}>🚀 Upload everything now</button><button class="btn good" id="upSchedAll" ${approved ? "" : "disabled"}>🗓 Schedule everything on free slots</button></div>
-    <p class="help"><b>Upload now</b> publishes at once, outside the schedule. <b>Schedule</b> gives each clip the next free slot of ITS channel (each channel has its own slots) and YouTube publishes it by itself. Until your Google Cloud project passes YouTube's API audit, YouTube keeps API uploads private and ignores the schedule; the assistant tells you when that happens.</p>
+  const on = !!S.youtube_logged_in;
+  $("#main").innerHTML = `<h1>YouTube</h1><p class="sub">Login, and upload the approved clips: right now, or into the next free publish slots.</p>
+  <div class="card"><h2>🎙 Voice-over channel</h2>
+    <div class="kv" style="margin:10px 0"><b>Login</b><span>${on ? "✅ logged in" : "❌ not logged in"}</span><b>Approved, waiting</b><span>${approved}</span><b>Privacy</b><span>${esc(S.privacy)} <span class="help">(Settings → YouTube upload)</span></span></div>
+    <div class="actions"><button class="btn primary" id="upNowAll" ${on && approved ? "" : "disabled"}>🚀 Upload now (public)</button>
+      <button class="btn good" id="upSchedAll" ${on && approved ? "" : "disabled"}>🗓 Schedule on available slots</button></div>
+    <div class="actions" style="margin-top:8px"><button class="btn sm" id="ytLogin" ${S.client_secret ? "" : "disabled"}>${on ? "Log in again" : "YouTube login"}</button>
+      ${on ? `<button class="btn sm danger" id="ytLogout">Logout</button>` : ""}<button class="btn sm" id="ytDry" ${approved ? "" : "disabled"}>Dry run</button></div>
+    <p class="help"><b>Upload now</b> publishes at once, outside the schedule. <b>Schedule</b> gives each clip the next free slot and YouTube publishes it by itself. Until your Google Cloud project passes YouTube's API audit, YouTube keeps API uploads private and ignores the schedule; the assistant tells you when that happens.</p>
     <div class="log" id="ylog" style="height:200px;margin-top:10px"><span class="t">The log will appear here.</span></div><div id="ystatus" style="margin-top:8px"></div></div>
   <div class="card"><h2>One-time setup</h2><ol class="steps"><li class="${S.client_secret ? "done" : ""}"><div><b>Create an OAuth client in Google Cloud</b>
       <div class="help">console.cloud.google.com → new project → enable "YouTube Data API v3" → OAuth consent screen (External, add your email as a test user) →
@@ -704,15 +702,11 @@ function viewYoutube() {
     catch (err) { toast(err.message, "bad"); }
   };
   const done = async () => { await refreshState(); };
-  document.querySelectorAll("[data-login]").forEach(b => b.onclick = () => startJob({kind: "youtube_login", channel: b.dataset.login}, "#ylog", "#ystatus", async () => { await refreshState(); viewYoutube(); }));
-  document.querySelectorAll("[data-logout]").forEach(b => b.onclick = async () => { await api("/api/youtube/logout", {method: "POST", body: {channel: b.dataset.logout}}); await refreshState(); viewYoutube(); });
-  document.querySelectorAll("[data-dry]").forEach(b => b.onclick = () => startJob({kind: "upload", dry_run: true, channel: b.dataset.dry}, "#ylog", "#ystatus"));
-  document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => {
-    const now = !!b.dataset.now, name = (S.channels[b.dataset.up] || {}).label;
-    if (confirm(now ? `Upload ALL approved ${name} clips and make them public right now?` : `Schedule the approved ${name} clips on the next free slots of that channel?`))
-      startJob({kind: "upload", channel: b.dataset.up, public_now: now}, "#ylog", "#ystatus", done); });
-  $("#upNowAll").onclick = () => { if (confirm("Upload every approved clip (both channels) and make them public right now?")) startJob({kind: "upload", public_now: true}, "#ylog", "#ystatus", done); };
-  $("#upSchedAll").onclick = () => { if (confirm("Schedule every approved clip on the free slots of its channel?")) startJob({kind: "upload"}, "#ylog", "#ystatus", done); };
+  $("#ytLogin").onclick = () => startJob({kind: "youtube_login"}, "#ylog", "#ystatus", async () => { await refreshState(); viewYoutube(); });
+  if ($("#ytLogout")) $("#ytLogout").onclick = async () => { await api("/api/youtube/logout", {method: "POST", body: {}}); await refreshState(); viewYoutube(); };
+  $("#ytDry").onclick = () => startJob({kind: "upload", dry_run: true}, "#ylog", "#ystatus");
+  $("#upNowAll").onclick = () => { if (confirm("Upload every approved clip and make them public right now?")) startJob({kind: "upload", public_now: true}, "#ylog", "#ystatus", done); };
+  $("#upSchedAll").onclick = () => { if (confirm("Schedule every approved clip on the next free slots?")) startJob({kind: "upload"}, "#ylog", "#ystatus", done); };
 }
 
 // ------------------------------------------------------------------ ANALYTICS
@@ -757,8 +751,8 @@ const learnOne = (l, name) => {
   h += `<div class="help">Best: ${l.best.map(b => esc(b.title) + " (" + b.views + " views)").join(" · ")}</div></div>`;
   return h;
 };
-const learnHtml = l0 => !l0 ? "" : learnOne(l0, "Voice-over channel") + (l0.streamer ? learnOne(l0.streamer, "Streamer-clips channel") : "")
-  + `<div class="actions"><button class="btn sm fit" id="learnRefresh">🔄 Retrain both channels now</button></div>`;
+const learnHtml = l0 => !l0 ? "" : learnOne(l0, "Your channel")
+  + `<div class="actions"><button class="btn sm fit" id="learnRefresh">🔄 Retrain now</button></div>`;
 async function viewAnalytics() {
   const panes = [["results", "📈 Results"], ["learning", "🧠 Learning (training)"], ["usage", "📊 Gemini usage"], ["quota", "🧮 Free quota"]];
   $("#main").innerHTML = `<h1>Analytics</h1><p class="sub">How the clips perform, what the assistant learned from it, and how much AI quota is used.</p>
@@ -902,9 +896,9 @@ async function viewAssistant() {
   const tl = setInterval(() => { if (tab !== "assistant") return clearInterval(tl); drawLive(); }, 2000);
   const autoHtml = (p) => !p ? "" : `<div class="card" id="apCard"><h2>🗓 Autopilot (links.txt)</h2>
     <div class="help">${p.enabled ? "ON" : "<b>OFF</b> (turn it on in Settings → Autopilot)"}${p.enabled && !p.assistant_on ? " — <b>but the assistant is OFF, turn it on</b>" : ""}.
-    Every day at ${esc(p.run_at)} the next link from <code>${esc(p.file)}</code> makes ${p.voiceover_clips} voice-over + ${p.streamer_clips} streamer clips; then quality check and scheduling happen by themselves.</div>
+    Every day at ${esc(p.run_at)} the next link from <code>${esc(p.file)}</code> makes ${p.voiceover_clips} voice-over clips; then quality check and scheduling happen by themselves.</div>
     <div style="margin:8px 0">Links: <b>${p.total}</b> · waiting <b>${p.pending}</b> · running <b>${p.running}</b> · done <b>${p.done}</b> · failed <b>${p.failed}</b> · skipped <b>${p.skipped}</b></div>
-    ${p.items.map(i => `<div class="help">${i.status === "done" ? "✅" : i.status === "running" ? "⏳" : i.status === "failed" ? "❌" : i.status === "skipped" ? "⏭" : "•"} ${esc(i.url.slice(0, 60))} ${i.voiceover != null ? `(VO ${i.voiceover}, ST ${i.streamer_n})` : ""} ${esc(i.error || "")} ${i.status === "failed" || i.status === "skipped" ? `<button class="btn sm fit" data-aretry="${i.key}">Retry</button>` : ""}</div>`).join("")}
+    ${p.items.map(i => `<div class="help">${i.status === "done" ? "✅" : i.status === "running" ? "⏳" : i.status === "failed" ? "❌" : i.status === "skipped" ? "⏭" : "•"} ${esc(i.url.slice(0, 60))} ${i.voiceover != null ? `(${i.voiceover} clips)` : ""} ${esc(i.error || "")} ${i.status === "failed" || i.status === "skipped" ? `<button class="btn sm fit" data-aretry="${i.key}">Retry</button>` : ""}</div>`).join("")}
     <label style="margin-top:8px">Add links (one per line)</label><textarea id="apText" rows="3" placeholder="https://www.youtube.com/watch?v=..."></textarea>
     <div class="actions" style="margin-top:8px"><button class="btn sm fit" id="apAdd">➕ Add to file</button> <button class="btn sm fit" id="apNow">▶ Run next link now</button></div></div>`;
   const stateHtml = a => `<div class="row"><h2 style="margin:0;flex:2"><span class="dot ${a.enabled ? (a.state.state === 'working' ? 'run' : 'ok') : 'bad'}"></span>
@@ -968,8 +962,7 @@ async function viewAssistant() {
             <div><label>Channel link (credit)</label><input type="text" id="asCredit" placeholder="https://www.youtube.com/@..."></div></div>
           <div class="grid2" style="gap:10px"><div><label>Type</label><select id="asKind"><option value="auto">auto-detect</option><option value="live">live stream</option><option value="video">recorded video</option></select></div>
             <div><label>Webcam position</label><select id="asFace">${["auto","top-left","top-right","bottom-left","bottom-right","none"].map(o => `<option>${o}</option>`).join("")}</select></div></div>
-          <div class="grid2" style="gap:10px"><div><label>Clip type (required)</label><select id="asMode"><option value="">— choose —</option><option value="voiceover">Voice-over clips (AI script + voice)</option><option value="streamer">Streamer clips (webcam on top, own voice)</option></select></div>
-            <div><label>How many clips? (required)</label><input type="number" id="asClips" min="1" max="50" placeholder="e.g. 5"></div></div>
+          <div><label>How many clips? (required)</label><input type="number" id="asClips" min="1" max="50" placeholder="e.g. 5"></div>
           <div class="actions"><button class="btn primary" id="asAdd">➕ Add to queue</button></div>
           <p class="help">Links are processed one after another. Tip: use <b>New video → Layout preview</b> first if a streamer's layout is unusual.</p>
           <div id="asQueue" style="margin-top:12px">${queueHtml(a)}</div>
@@ -977,11 +970,10 @@ async function viewAssistant() {
     Object.entries(keep).forEach(([k, v]) => { const el = document.getElementById(k); if (el) el.value = v; });
     wire();
     $("#asAdd").onclick = async () => {
-      if (!$("#asMode").value) return toast("Choose the clip type first: voice-over or streamer", "bad");
       if (!(+$("#asClips").value > 0)) return toast("Enter how many clips you want from this link", "bad");
       try {
         await api("/api/assistant/sources", {method: "POST", body: {url: $("#asUrl").value, kind: $("#asKind").value, streamer: $("#asStreamer").value,
-          mode: $("#asMode").value, clips: +$("#asClips").value,
+          clips: +$("#asClips").value,
           credit_url: $("#asCredit").value, facecam: $("#asFace").value === "auto" ? "" : $("#asFace").value}});
         toast("Added to the queue", "ok"); $("#asUrl").value = ""; draw();
       } catch (e) { toast(e.message, "bad"); }
@@ -1062,7 +1054,17 @@ VIEWS.assistant = viewAssistant; VIEWS.create = viewCreate; VIEWS.clips = viewCl
 VIEWS.analytics = viewAnalytics; VIEWS.memory = viewMemory; VIEWS.settings = viewSettings;
 
 // ------------------------------------------------------------------ boot
-async function refreshState() { try { S = await api("/api/state"); renderNav(); } catch (e) {} }
+async function refreshState() {
+  try {
+    S = await api("/api/state"); renderNav();
+    let b = document.getElementById("revBanner");
+    if (S.rev !== UI_REV) {
+      if (!b) { b = document.createElement("div"); b.id = "revBanner"; b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99;background:#ff6b6b;color:#200;padding:10px 16px;font-weight:700;text-align:center";
+        document.body.appendChild(b); }
+      b.textContent = "⚠️ The running program is older than this page, so some buttons will say 'Not Found'. Close featureclip completely (all black windows, or end python in Task Manager) and start it again.";
+    } else if (b) b.remove();
+  } catch (e) {}
+}
 document.getElementById("themeBtn").onclick = () => {
   const r = document.documentElement, t = r.dataset.theme === "light" ? "dark" : "light";
   r.dataset.theme = t; try { localStorage.setItem("theme", t); } catch (e) {}

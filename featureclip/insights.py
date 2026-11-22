@@ -167,18 +167,7 @@ def collect(store, cfg, fetch=None) -> int:
     if not clips:
         return 0
     fetch = fetch or uploader.fetch_stats
-    from . import channels
-    data: dict = {}
-    for key in channels.KEYS:                          # each channel is read with its own login
-        part = [c["youtube_id"] for c in clips if channels.key_of_clip(c) == key]
-        if not part or not channels.logged_in(cfg, key) and fetch is uploader.fetch_stats:
-            continue
-        try:
-            with channels.use(cfg, key):
-                data.update(fetch(cfg, part))
-        except Exception:
-            if key == "voiceover":
-                raise
+    data = fetch(cfg, [c["youtube_id"] for c in clips])
     n = 0
     for c in clips:
         d = data.get(c["youtube_id"])

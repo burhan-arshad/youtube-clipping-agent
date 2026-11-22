@@ -18,16 +18,12 @@ def channel_name(cfg) -> str:
     return str(cfg.get("branding.name", "") or "").strip() or str(cfg.get("branding.handle", "") or "").strip()
 
 
-def credit_lines(cfg, streamer: str = "", streamer_clip: bool | None = None) -> list[str]:
+def credit_lines(cfg, streamer: str = "") -> list[str]:
     """Footer of the description: names only, never links (links in Shorts descriptions are not wanted)."""
     lines = []
-    if (cfg.get("layout.mode") == "streamer") if streamer_clip is None else streamer_clip:
-        who = streamer or "the streamer"
-        lines.append(f"Clip from {who}'s stream. All credit to {who}: original footage and voice.")
-    else:
-        if streamer:
-            lines.append(f"Footage from {streamer}'s stream.")
-        lines.append("Voice-over: AI-generated.")
+    if streamer:
+        lines.append(f"Footage from {streamer}'s stream.")
+    lines.append("Voice-over: AI-generated.")
     foot = str(cfg.get("upload.description_footer", "") or "").strip()
     if foot:
         lines.append(foot)
@@ -126,60 +122,18 @@ def build_description_plain(judgement: dict, streamer: str, cfg) -> str:
     return build_description(judgement, streamer, "", cfg)
 
 
-def build_title_stream(who: str, judgement: dict, game: str, cfg) -> str:
-    """No-AI fallback title for a reaction clip: about the streamer, not about the game."""
-    from .uploader import build_title
-    what = (judgement.get("feature_name") or "reacts").strip()
-    base = f"{who}: {what}"[:80]
-    if game and game.lower() not in base.lower():
-        base = f"{base} in {game}"[:90]
-    return build_title(base, what, norm_suffix(cfg.get("upload.title_suffix", "")))
-
-
-STREAMER_PROMPT = """You write YouTube Shorts metadata for a channel that publishes REACTION clips of {game} streamers:
-the streamer laughing, screaming or being shocked. The clip is ABOUT THE STREAMER AND THEIR REACTION, not about the game.
-{playbook}
-
-FACTS (only use these, never invent anything):
-{facts}
-
-Write:
-1. "title" - about {who} and the reaction: name the streamer, say what made them react and how (laughing, screaming, shocked, rage).
-   Examples of the structure: "Ducky Bhai Screams When the Car Flips in GTA 6", "Streamer Can't Stop Laughing at This GTA 6 Glitch".
-   {title_rules}{style}
-2. "description" - plain text, 4 parts separated by blank lines:
-   a) one strong sentence (max 140 characters) about the streamer's reaction and what caused it
-   b) 1-2 short sentences of context (what happened in the game, what the streamer said or did), from the facts only
-   c) one question that makes viewers comment (e.g. "Would you have reacted the same?")
-   d) 3 to 5 hashtags (include #{tag} and #Shorts), nothing else on that line
-   Do not add credits, links or disclaimers; the program adds them. Do not write about game features or mechanics.
-3. "tags" - 8 to 12 search keywords (lowercase, no #): the streamer's name, the game name, "funny moments", "reaction", "streamer clips".
-4. "thumb_text" - 2 to 4 punchy words about the REACTION (e.g. "HE LOST IT", "NOT AGAIN", "PURE SHOCK"), no game name,
-   no hashtags, never more than 28 characters.
-
-Return JSON only: {{"title": "...", "description": "...", "tags": ["..."], "thumb_text": "..."}}"""
-
-
 def generate(llm, cfg, judgement: dict, script: str, hook_title: str, streamer: str = "", credit_url: str = "",
              title_style: str = "") -> dict:
     """Returns {"title","description","tags"}. Falls back to the plain builder if the AI cannot deliver."""
     game = str(cfg.get("game.name", "") or "")
     handle = str(cfg.get("branding.handle", "") or "").strip()
-    is_stream = bool(judgement.get("streamer_clip", cfg.get("layout.mode") == "streamer"))
     fb = fallback(judgement, hook_title, game, streamer, credit_url, cfg)
-    if is_stream:
-        who0 = streamer or "Streamer"
-        fb["title"] = build_title_stream(who0, judgement, game, cfg)
     if not llm or not llm.available():
         return fb
     facts = (f"Feature: {judgement.get('feature_name', '')}\nWhat happens: {judgement.get('what_happens', '')}\n"
              f"Visible evidence: {'; '.join(judgement.get('visible_evidence', []) or [])}\n"
-             + (f"What the streamer says in the clip (their own voice): {script}\nThis Short is an original clip from "
-                f"{streamer or 'the streamer'}'s stream, not a voice-over: describe the moment (funny / chaos / feature / bug)."
-                if is_stream else f"Voice-over: {script}"))
-    prompt = STREAMER_PROMPT.format(game=game, facts=facts, playbook=PLAYBOOK, who=streamer or "the streamer",
-                                    tag=re.sub(r'[^A-Za-z0-9]', '', game), title_rules=TITLE_RULES.format(game=game),
-                                    style=((" Title style for this video: " + title_style + ".") if title_style else "")) if is_stream else f"""You write YouTube Shorts metadata for a {game} channel that explains small game details.
+             f"Voice-over: {script}")
+    prompt = f"""You write YouTube Shorts metadata for a {game} channel that explains small game details.
 {PLAYBOOK}
 
 FACTS (only use these, never invent anything):
@@ -215,7 +169,7 @@ Return JSON only: {{"title": "...", "description": "...", "tags": ["..."], "thum
         feedback = "\n\nYour previous answer had problems, fix them: " + "; ".join(problems)
     if not meta:
         return fb
-    tail = credit_lines(cfg, streamer, is_stream)
+    tail = credit_lines(cfg, streamer)
     body = meta["description"]
     m = re.search(r"\n\s*(#\w+(?:\s+#\w+)*)\s*$", body)
     tags_line = m.group(1) if m else ""

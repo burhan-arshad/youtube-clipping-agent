@@ -19,7 +19,7 @@ schedules clips every day, learns from the results, restarts itself after a cras
 5. [Quick start](#quick-start)
 6. [Autopilot](#autopilot)
 7. [The web UI (tabs)](#the-web-ui-tabs)
-8. [Two channels, two clip types](#two-channels-two-clip-types)
+8. [Upgrading from the old two-channel version](#upgrading-from-the-old-two-channel-version)
 9. [Configuration](#configuration)
 10. [Command line](#command-line)
 11. [Reliability and safety](#reliability-and-safety)
@@ -37,12 +37,9 @@ schedules clips every day, learns from the results, restarts itself after a cras
 
 | Clip type | Look | Audio | Goes to |
 |---|---|---|---|
-| **Voice-over** | gameplay filling the 9:16 screen (or a 4:5 block over a blurred copy), burned-in captions | AI-written short script, spoken by a local voice (Kokoro) or Gemini voice, soft background music | YouTube channel 1 (voice-over channel) |
-| **Streamer** | the streamer's webcam on top, gameplay below | the streamer's **own** audio, no script, no voice, no music | YouTube channel 2 (streamer channel) |
+| **Voice-over** | gameplay filling the 9:16 screen (or a 4:5 block over a blurred copy), burned-in captions | AI-written short script, spoken by a local voice (Kokoro) or Gemini voice, soft background music | your YouTube channel |
 
-Streamer clips are **reaction-only**: the AI keeps moments where the streamer laughs, screams or is clearly shocked, and the
-title/description are written about the streamer's reaction, not about the gameplay. Each clip starts at the beginning of a
-sentence and ends at the end of one (never cut mid-word).
+(The earlier "streamer reaction" clip type and second channel were discontinued: the tool now has one job and one channel.)
 
 ## How it works
 
@@ -55,7 +52,7 @@ sentence and ends at the end of one (never cut mid-word).
   └─────┬─────┘
         ▼
   ┌───────────┐   Whisper (local) hears the speech, Gemini looks at frames
-  │   judge   │──► "is this clip-worthy?" + category + (streamer mode) face close-ups, reaction score
+  │   judge   │──► "is this clip-worthy?" + category
   └─────┬─────┘
         ▼
   ┌───────────┐   find gameplay area / webcam, crop 9:16, script + voice (voice-over mode),
@@ -83,7 +80,6 @@ Every stage is resumable: signals, transcripts and finished clips are cached, so
 - Automatic layout detection (gameplay area, webcam corner, chat/overlays) with a visual preview and manual crop.
 - Voice-over script writer with a code-side checker (numbers/dates the AI was not given are removed).
 - Local voices (Kokoro), optional Gemini voices, synthesised copyright-free background music, animated captions.
-- Streamer mode: webcam + gameplay layout, face close-ups for the judge, reaction scoring, clean sentence bounds.
 - Live mode: records a live stream in short pieces and clips every finished piece.
 - QA gates on the final mp4 (a clip that fails is never uploaded).
 
@@ -94,7 +90,7 @@ Every stage is resumable: signals, transcripts and finished clips are cached, so
 - Title/description/tags/thumbnail written by the AI, with credit to the streamer in the description.
 
 **Automation**
-- **Autopilot:** a links file, N voice-over + N streamer clips per day from the same video, quality check, scheduling.
+- **Autopilot:** a links file, N voice-over clips per day from one video, quality check, scheduling.
 - **Assistant:** works the queue, reviews, approves, publishes, reads YouTube stats, retrains, cleans the disk, makes backups.
 - Notifications: in-app bell, phone push (ntfy.sh), Telegram, Gmail. Errors, finished links and "links running out" reminders.
 - Watchdog: restarts the program after a crash or a hang; starts on Windows login.
@@ -134,7 +130,7 @@ python -m featureclip ui          :: opens http://127.0.0.1:8765
 ```
 1. **Settings → AI (Gemini):** paste your key.
 2. **YouTube tab:** choose `client_secret.json` (see below), then log in once per channel.
-3. **New video:** paste a video link, choose *Voice-over* or *Streamer*, enter how many clips, press **Make clips**.
+3. **New video:** paste a video link, enter how many clips, press **Make clips**.
 4. **Clips:** review the result. Or switch the **Assistant** on and let it approve and schedule.
 
 ### YouTube setup (one time)
@@ -158,8 +154,8 @@ https://www.youtube.com/watch?v=YYYYYYYYYYY
 Turn on **Settings → Autopilot → enabled** and switch the **Assistant** on. Then, every day at `run_at` (default 09:00):
 
 1. the next link is taken (one per day by default; if the laptop was off, it catches up when it starts);
-2. the video is downloaded **once** and used twice: 5 voice-over clips and 5 streamer clips;
-3. each clip goes through the AI quality check; good ones are approved and scheduled on the next free slot of their channel;
+2. the video is downloaded once and turned into 5 voice-over clips;
+3. each clip goes through the AI quality check; good ones are approved and scheduled on the next free slot;
 4. you get a notification with the result. If a link produces nothing it is retried once, then skipped with an error notice;
 5. when few links are left (default 3), when the last link is taken, and every day once none are left, you get a reminder.
 
@@ -181,10 +177,13 @@ Live-stream links are skipped (record those from the Assistant/New video tabs). 
 | 🧠 **Memory** | disk usage; delete **clip files** or **work files** (the data stays); smart cleanup; backups |
 | ⚙️ **Settings** | every setting in one place, in sections, one Save button; tools: self-test, Gemini test, system check, voice lab |
 
-## Two channels, two clip types
+## Upgrading from the old two-channel version
 
-The clip type is chosen per link (and per Autopilot run), so you only set it up once: log in the voice-over channel and
-the streamer channel in the YouTube tab, and every clip is uploaded to the right one with its own slots and caps.
+The first time the new version starts it **backs up** your database and then removes the old streamer-clip leftovers
+(streamer clips, their files, their queue entries, old streamer settings). Voice-over clips are never touched. You can also
+run it yourself: `python -m featureclip remove-streamer` (shows what would go) and add `--yes` to really delete.
+Then delete `token_streamer.json` and the `streamer:` / `channels:` blocks in `config.yaml` by hand (they are ignored).
+Clips already uploaded to the old streamer channel stay on YouTube; delete them in YouTube Studio if you want.
 
 ## Configuration
 
@@ -196,16 +195,13 @@ Secrets live in `.env` and never in `config.yaml`. Defaults and comments: `featu
 | `assistant.enabled` / `assistant.mode` | off / `auto` | `auto` approves and schedules by itself, `ask` only reviews |
 | `autopilot.enabled` | off | work through the links file |
 | `autopilot.run_at`, `links_per_day` | `09:00`, `1` | when and how many links per day |
-| `autopilot.voiceover_clips`, `streamer_clips` | `5`, `5` | clips per link and type |
+| `autopilot.voiceover_clips` | `5` | clips per link |
 | `autopilot.warn_links_left` | `3` | reminder threshold |
 | `schedule.slots` | `21:00, 01:00, 05:00` | publish times, **Pakistan time** |
 | `schedule.max_ahead_days` | `3` | how far ahead slots are filled |
 | `upload.privacy` | `private` | `private` / `unlisted` / `public` (start with private) |
 | `upload.max_per_day` | `3` | daily upload cap per channel when not scheduling |
-| `streamer.min_reaction` | `45` | minimum reaction score (0–100) for streamer clips |
-| `streamer.quality_floor` | `62` | minimum interest score for streamer clips |
-| `streamer.audio_delay` | `0.0` | seconds to delay the streamer's audio if it ever runs ahead of the picture |
-| `layout.mode` | `fill` | `fill`, `hybrid` or `streamer` |
+| `layout.mode` | `fill` | `fill` or `hybrid` |
 | `cleanup.max_work_gb` | `20` | hard limit of the work folder |
 | `backup.every_hours`, `backup.keep` | `24`, `7` | automatic backups |
 | `llm.provider` | `gemini` | or an OpenAI-compatible provider for a paid key |
@@ -266,11 +262,9 @@ Restore: close the program, then `python -m featureclip restore data\backups\<fi
 | Problem | What to do |
 |---|---|
 | `ModuleNotFoundError: yaml` (or any module) | you are not in the environment where `pip install -r requirements.txt` was run; activate it first |
-| 0 clips from a streamer video | the AI found no clear reaction; lower `streamer.min_reaction` a little, or use a video with more laughing/screaming |
 | Gemini 429 / quota | the tool switches models by itself; see Analytics → Free quota. Quota resets at midnight Pacific time |
 | YouTube keeps uploads private | your Google project is not audited yet; publish from YouTube Studio (the assistant notifies you) |
 | yt-dlp bot / 429 errors | put a `cookies.txt` in the project folder or set the browser cookie option in Settings → Download |
-| Voice slightly ahead of the picture on streamer clips | set `streamer.audio_delay` to e.g. `0.3` and send a log if it persists |
 | UI shows old settings | press **Save all settings**; settings are only written on Save |
 | Disk full | Memory tab → delete work files / clip files |
 
@@ -291,8 +285,8 @@ featureclip/
   agent.py         the assistant loop (queue, review, publish, learn, housekeeping)
   autopilot.py     links file, one link per day, reminders
   judge.py, signals.py, candidates.py, layout.py, ai_layout.py   finding and judging moments
-  transcribe.py, narrate.py, tts.py, music.py, captions.py, compose.py, qa.py, bounds.py   building the clip
-  metadata.py, uploader.py, schedule.py, launch.py, quota.py, channels.py                 publishing
+  transcribe.py, narrate.py, tts.py, music.py, captions.py, compose.py, qa.py   building the clip
+  metadata.py, uploader.py, schedule.py, launch.py, quota.py                 publishing
   learn.py, insights.py, styles.py        learning from YouTube results
   llm.py, llm_limits.py                   Gemini (and OpenAI-compatible) client, fallbacks, limits
   live.py          live recording in pieces
@@ -321,7 +315,7 @@ config.example.yaml, .env.example, links.txt.example
   demonetization or strikes. Read the current policy yourself and consider asking the publisher for explicit permission.
 - YouTube's reused/inauthentic-content rules require real added value in each Short. Do not post many near-identical clips;
   keep the daily cap low and vary the content.
-- Streamer clips use the streamer's own audio and always credit the streamer in the description. Get their permission.
+- The description always credits the streamer. Get their permission.
 - This tool deliberately contains no tricks to avoid Content ID or copy detection.
 
 ## License

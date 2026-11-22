@@ -281,8 +281,7 @@ def watch(pipe, source_id: str, url: str | None = None, segment_seconds: int = 6
                                 "-movflags", "+faststart", str(mp4)])
             off = av_start_offset(mp4 if mp4.is_file() else seg)
             if off is not None and abs(off) > 0.3:
-                log(f"  note: audio starts {off:+.2f}s from the video in this piece; if streamer clips sound out of sync, set "
-                    f"Settings > Video look > voice delay")
+                log(f"  note: audio starts {off:+.2f}s from the video in this piece")
             vid = pipe.scan(source_id, path=mp4 if r.returncode == 0 and mp4.is_file() else seg)
             drain(vid)
         except Exception as e:           # one bad piece must not stop the live run

@@ -5,7 +5,7 @@ links.txt (one link per line, '#' = comment; optional "| streamer name | facecam
     https://www.youtube.com/watch?v=YYYY
 
 Every day at `autopilot.run_at` (or as soon as the laptop is on after that time) the next link is taken and the SAME video
-is made twice: N voice-over clips (voice-over channel) and M streamer reaction clips (streamer channel). The assistant then
+is turned into N voice-over clips for the channel. The assistant then
 does what it always does: AI quality check, auto-approve, next free publish slot, stats, learning. You are told about
 the result of every link, about errors, and when the links are running out.
 
@@ -138,25 +138,24 @@ def tick(cfg, store, notifier, now: float | None = None, is_live_fn=None, stream
         st["links"].setdefault(l["key"], {"url": l["url"], "status": "pending", "attempts": 0})
         st["links"][l["key"]].update(streamer=l["streamer"], facecam=l["facecam"])
     order = [l["key"] for l in links]
-    n_vo, n_st = int(cfg.get("autopilot.voiceover_clips", 5)), int(cfg.get("autopilot.streamer_clips", 5))
+    n_vo = int(cfg.get("autopilot.voiceover_clips", 5))
 
     # 1. finish the link that is running
     for k, d in st["links"].items():
         if d["status"] != "running":
             continue
         srcs = {s["id"]: s for s in store.agent_sources()}
-        a, b = srcs.get(d.get("vo_sid")), srcs.get(d.get("st_sid"))
-        if a is None or b is None:                          # removed from the queue by hand
+        a = srcs.get(d.get("vo_sid"))
+        if a is None:                         # removed from the queue by hand
             d["status"] = "failed"
             d["error"] = "its queue entries were removed"
             continue
-        if a["status"] not in ("done", "error") or b["status"] not in ("done", "error"):
+        if a["status"] not in ("done", "error"):
             continue
-        vo = _clips_made(store, source_for(d["url"], mode="voiceover").id)
-        sc = _clips_made(store, source_for(d["url"], mode="streamer").id)
-        d.update(voiceover=vo, streamer_n=sc, finished=now)
-        err = "; ".join(x for x in ((a.get("note") or ""), (b.get("note") or "")) if x)[:300]
-        if vo + sc == 0:
+        vo = _clips_made(store, source_for(d["url"]).id)
+        d.update(voiceover=vo, finished=now)
+        err = (a.get("note") or "")[:300]
+        if vo == 0:
             if int(d.get("attempts", 0)) < 2:
                 d["status"] = "pending"
                 notifier.send("warn", "Autopilot: no clips from a link, will try again",
@@ -167,14 +166,9 @@ def tick(cfg, store, notifier, now: float | None = None, is_live_fn=None, stream
                 notifier.send("error", "Autopilot: link failed twice, skipped", f"{d['url'][:70]}\n{d['error']}")
         else:
             d["status"] = "done"
-            short = []
-            if vo < n_vo:
-                short.append(f"voice-over {vo}/{n_vo}")
-            if sc < n_st:
-                short.append(f"streamer {sc}/{n_st}")
-            notifier.send("ok" if not short else "warn", "Autopilot: link finished",
-                          f"{d['url'][:70]}\nVoice-over clips: {vo}, streamer clips: {sc}. They go through the quality check and get "
-                          f"publish slots automatically." + (f"\nFewer than wanted: {', '.join(short)}." if short else ""))
+            notifier.send("ok" if vo >= n_vo else "warn", "Autopilot: link finished",
+                          f"{d['url'][:70]}\nVoice-over clips: {vo}. They go through the quality check and get "
+                          f"publish slots automatically." + (f"\nFewer than wanted: {vo}/{n_vo}." if vo < n_vo else ""))
 
     # 2. start the next link (once per day, after run_at; also when the laptop was off at that time)
     running = any(d["status"] == "running" for d in st["links"].values())
@@ -191,16 +185,13 @@ def tick(cfg, store, notifier, now: float | None = None, is_live_fn=None, stream
         else:
             who = d.get("streamer") or (streamer_fn or fetch_streamer_name)(d["url"], cfg)
             d["streamer"] = who
-            base = {"facecam": d.get("facecam", ""), "autopilot": k}
-            d["vo_sid"] = store.add_agent_source(d["url"], "video", f"[autopilot voice-over] {d['url'][-40:]}", who, "",
-                                                 {**base, "mode": "voiceover", "clips": n_vo})
-            d["st_sid"] = store.add_agent_source(d["url"], "video", f"[autopilot streamer] {d['url'][-40:]}", who, "",
-                                                 {**base, "mode": "streamer", "clips": n_st})
+            d["vo_sid"] = store.add_agent_source(d["url"], "video", f"[autopilot] {d['url'][-40:]}", who, "",
+                                                 {"facecam": d.get("facecam", ""), "autopilot": k, "clips": n_vo})
             d["status"], d["started"], d["attempts"] = "running", now, int(d.get("attempts", 0)) + 1
             st["started"][today] = int(st["started"].get(today, 0)) + 1
             pending = [x for x in pending if x != k]
             notifier.send("info", "Autopilot started a link",
-                          f"{d['url'][:70]}\nStreamer: {who or 'unknown'} | {n_vo} voice-over + {n_st} streamer clips")
+                          f"{d['url'][:70]}\nStreamer: {who or 'unknown'} | {n_vo} voice-over clips")
         # keep going next tick for the next link of the day
 
     # 3. running out of links
@@ -211,13 +202,13 @@ def tick(cfg, store, notifier, now: float | None = None, is_live_fn=None, stream
         if st.get("warned_last") != "last":
             st["warned_last"] = "last"
             notifier.send("warn", "Autopilot: this is the LAST link", "No links are left after the current one. Add new links to "
-                          f"{links_path(cfg).name} (or in the Assistant tab) to keep the channels fed.")
+                          f"{links_path(cfg).name} (or in the Assistant tab) to keep the channel fed.")
     elif left == 0 and not running and st.get("empty_day") != today and (time.localtime(now).tm_hour, time.localtime(now).tm_min) >= _run_at(cfg):
         st["empty_day"] = today
         notifier.send("warn", "Autopilot: no links left", f"Nothing to do today. Add links to {links_path(cfg).name} (or in the Assistant tab).")
     elif 0 < left <= thr and st.get("warned_left") != left:
         st["warned_left"] = left
-        notifier.send("info", f"Autopilot: only {left} link(s) left", "Add more links soon so the channels do not run dry.")
+        notifier.send("info", f"Autopilot: only {left} link(s) left", "Add more links soon so the channel does not run dry.")
     if left > thr:
         st["warned_left"], st["warned_last"] = None, None
     save_state(store, st)
@@ -239,13 +230,13 @@ def status(cfg, store) -> dict:
     for l in links:
         d = st["links"].get(l["key"], {"status": "pending"})
         items.append({"key": l["key"], "url": l["url"], "streamer": d.get("streamer") or l["streamer"], "status": d.get("status", "pending"),
-                      "voiceover": d.get("voiceover"), "streamer_n": d.get("streamer_n"), "error": d.get("error", "")})
+                      "voiceover": d.get("voiceover"), "error": d.get("error", "")})
     count = lambda s: sum(1 for i in items if i["status"] == s)
     h, m = _run_at(cfg)
     return {"enabled": bool(cfg.get("autopilot.enabled", False)), "assistant_on": bool(cfg.get("assistant.enabled", False)),
             "file": str(links_path(cfg)), "run_at": f"{h:02d}:{m:02d}", "total": len(items), "pending": count("pending"),
             "running": count("running"), "done": count("done"), "failed": count("failed"), "skipped": count("skipped"),
-            "voiceover_clips": int(cfg.get("autopilot.voiceover_clips", 5)), "streamer_clips": int(cfg.get("autopilot.streamer_clips", 5)),
+            "voiceover_clips": int(cfg.get("autopilot.voiceover_clips", 5)),
             "items": items[-12:] if len(items) > 12 else items}
 
 

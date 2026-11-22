@@ -85,5 +85,5 @@ def test_api_memory_stop_all_and_channel_upload(tmp_path):
     assert "free_gb" in c.get("/api/memory").json()
     assert c.post("/api/memory/delete", json={"what": "nope"}).status_code == 400
     assert c.post("/api/stop-all").json()["stopped"] == 0
-    r = c.post("/api/jobs", json={"kind": "upload", "channel": "streamer", "public_now": True, "dry_run": True})
+    r = c.post("/api/jobs", json={"kind": "upload", "public_now": True, "dry_run": True})
     assert r.status_code == 200

@@ -37,7 +37,7 @@ def make_pipe(tmp_path, fail_first_n=0):
         calls["build"] += 1
         st.judged[vid] = 0
 
-    pipe = SimpleNamespace(sources={"s": Source(id="s", streamer="x")}, work=tmp_path, store=st,
+    pipe = SimpleNamespace(sources={"s": Source(id="s", streamer="x")}, work=tmp_path, store=st, cfg=SimpleNamespace(get=lambda k, d=None: d),
                            scan=scan, judge=judge, build=build)
     return pipe, calls
 

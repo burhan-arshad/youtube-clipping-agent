@@ -1,0 +1,207 @@
+game:
+  name: GTA 6
+  topic_hint: open-world action game; show gameplay features, mechanics, details
+  hints:
+  - vehicle
+  - damage
+  - and
+  - deformation
+  - (dents
+  - broken
+  - glass
+  - falling
+  - parts
+  - smoke)
+  - car
+  - and
+  - bike
+  - physics
+  - (suspension
+  - drifting
+  - tire
+  - smoke
+  - water
+  - splashes
+  - crashes)
+  - NPC
+  - behaviour
+  - (reactions
+  - to
+  - the
+  - player
+  - phones
+  - and
+  - filming
+  - fleeing
+  - talking
+  - fighting)
+  - police
+  - behaviour
+  - (wanted
+  - level
+  - chases
+  - roadblocks
+  - arrests)
+  - animals
+  - and
+  - wildlife
+  - (alligators
+  - birds
+  - fish
+  - dogs)
+  - weather
+  - lighting
+  - heat
+  - haze
+  - reflections
+  - water
+  - wet
+  - surfaces
+  - crowds
+  - traffic
+  - density
+  - city
+  - life
+  - beaches
+  - boats
+  - jet
+  - skis
+  - character
+  - animation
+  - details
+  - (footsteps
+  - in
+  - sand
+  - clothes
+  - hands
+  - faces
+  - swimming)
+  - 'weapons:'
+  - reload
+  - recoil
+  - aiming
+  - cover
+  - shooting
+  - reactions
+  - destruction
+  - of
+  - objects
+  - 'interactions:'
+  - shops
+  - phones
+  - doors
+  - interiors
+  - mini-features
+  - interface
+  - elements
+layout:
+  facecam: auto
+  mode: streamer
+  ai: true
+llm:
+  provider: gemini
+whisper:
+  model: base.en
+audio:
+  game_audio: 'off'
+  music_dir: Y:\Work
+  music: true
+  music_db: -22
+review:
+  auto_approve: false
+upload:
+  privacy: private
+  max_per_day: 3
+  manage_videos: true
+  analytics: true
+  title_suffix: '#Shorts'
+  first_comment: true
+  synthetic_disclosure: false
+assistant:
+  enabled: true
+  mode: ask
+  review_strictness: strict
+  max_rebuilds: 1
+  piece_minutes: 10
+  stock_target: 15
+  weekly_report: true
+  buffer_days: 2
+learn:
+  use_playbook: true
+schedule:
+  enabled: true
+  slots:
+  - '21:00'
+  - 01:00
+  - 05:00
+  max_ahead_days: 20
+  autotune: auto
+  pool:
+  - '17:00'
+  - '19:00'
+  - '21:00'
+  - '23:00'
+  - 01:00
+  - 03:00
+  - 05:00
+  - 07:00
+safe:
+  auto: true
+cleanup:
+  enabled: true
+  raw_hours: 5
+  keep_output_days: 3
+  min_free_gb: 1
+  max_work_gb: 3
+  stop_free_gb: 0.3
+notify:
+  ntfy_topic: hard_to_guess
+judge:
+  strictness: loose
+  quality_floor: 70
+  max_clips_per_video: 10
+branding:
+  name: LeonidaFiles
+  handle: '@LeonidaFiles24'
+paths:
+  output: Y:\Clips
+  workdir: Y:\Work
+video:
+  clip_min: 25
+  clip_max: 40
+captions:
+  enabled: true
+narration:
+  engine: gemini
+  gemini_voice: Fenrir
+  gemini_style: 'a real person narrating gameplay live: warm, curious, genuinely excited
+    at the big moment, natural pace'
+  voice: bm_fable
+  punch_up: true
+ingest:
+  cookies_file: Y:\featureclip\cookies.txt
+streamer:
+  top_ratio: 0.36
+  captions: true
+  quality_floor: 62
+  min_reaction: 55
+  clip_min: 20
+  clip_max: 45
+  audio_delay: 0
+  smart_bounds: true
+channels:
+  voiceover:
+    name: Leonida Clip
+  streamer:
+    name: LeonidaClip24
+backup:
+  enabled: true
+  keep: 7
+autopilot:
+  enabled: false
+  links_file: links.txt
+  run_at: '18:00'
+  links_per_day: 1
+  voiceover_clips: 5
+  streamer_clips: 5
+  warn_links_left: 2

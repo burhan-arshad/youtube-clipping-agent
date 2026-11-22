@@ -204,5 +204,19 @@
    "clips": 10,
    "since": 1795242658.409719
   }
+ },
+ "web-efcae4be-streamer": {
+  "id": "web-efcae4be-streamer",
+  "streamer": "Ducky Bhai",
+  "url": "https://www.youtube.com/watch?v=fz7OAXEiu54",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@DuckyReloaded1",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "mode": "streamer",
+   "clips": 50,
+   "since": 1795287729.865095
+  }
  }
 }

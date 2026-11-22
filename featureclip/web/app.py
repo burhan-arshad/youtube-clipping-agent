@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..agent import Assistant
-from .. import activity, channels, cleanup, insights, launch, learn, metadata, safe, schedule as sched
+from .. import activity, cleanup, insights, launch, learn, metadata, safe, schedule as sched
 from ..config import load_config
 from ..pipeline import Pipeline
 from .. import extras
@@ -26,9 +26,18 @@ from .jobs import JobManager, load_all_sources
 STATIC = Path(__file__).resolve().parent / "static"
 
 
+API_REV = 35          # bump when the UI needs a new endpoint; the page compares it with its own number
+
+
 def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAPI:
     root = Path(root).resolve()
     app = FastAPI(title="featureclip", docs_url=None, redoc_url=None)
+    try:                                   # one-time clean-up of the discontinued streamer channel (backup first)
+        from .. import legacy
+        _c = load_config(config_path, root=root)
+        legacy.auto(_c, Store(_c.path("paths.db")))
+    except Exception:
+        pass
     jm = JobManager(root, config_path)
     assistant = Assistant(root, config_path, jm)
     assistant.start()
@@ -61,14 +70,10 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             "has_key": bool(c.gemini_key or c.openai_key),
             "ffmpeg": bool(shutil.which("ffmpeg") and shutil.which("ffprobe")),
             "client_secret": secret.is_file(), "youtube_logged_in": token.is_file(),
-            "channels": {k: {"logged_in": channels.logged_in(c, k), "label": channels.LABELS[k],
-                             "name": str(c.get(f"channels.{k}.name", "") or ""),
-                             "approved": sum(1 for r in st.clips(status="approved") if channels.key_of_clip(r) == k)}
-                         for k in channels.KEYS},
             "counts": counts, "running": run.info(0)["title"] if run else None,
             "output": str(c.path("paths.output")), "workdir": str(c.path("paths.workdir")),
             "uploads_today": Pipeline(c, st, {}).uploads_today(), "max_per_day": c.get("upload.max_per_day"),
-            "privacy": c.get("upload.privacy"), "root": str(root),
+            "privacy": c.get("upload.privacy"), "root": str(root), "rev": API_REV,
         }
 
     @app.get("/api/doctor")
@@ -104,8 +109,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         except Exception:
             pass
         add("Gemini API key", c.gemini_key, "Add the key in Settings")
-        for _k in channels.KEYS:
-            add(f"YouTube login: {channels.LABELS[_k]}", channels.logged_in(c, _k), "Open the YouTube tab and sign in")
+        add("YouTube login", token.is_file(), "Open the YouTube tab and sign in")
         from .. import schedule as _s
         add("Publish slots valid", bool(_s.parse_slots(c.get("schedule.slots", _s.DEFAULT_SLOTS))), "Settings > Schedule: use HH:MM, comma separated")
         add("Phone/email alerts set", bool(c.get("notify.ntfy_topic") or c.get("notify.email_to")),
@@ -216,12 +220,6 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         return {"ok": True}
 
     # ------------------------------------------------------------------ jobs
-    def _mode(body: dict) -> str:
-        m = body.get("mode") or "voiceover"
-        if m not in ("voiceover", "streamer"):
-            raise HTTPException(400, "Choose the clip type: voiceover or streamer")
-        return m
-
     def _clips(body: dict) -> int:
         try:
             return max(0, int(body.get("clips") or 0))
@@ -240,7 +238,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
                 raise HTTPException(400, "Add your Gemini API key in Settings first")
             j = jm.submit("run", f"Make clips: {v[:70]}", video=v, streamer=body.get("streamer", ""),
                           credit_url=body.get("credit_url", ""), facecam=body.get("facecam", ""), crop=body.get("crop"),
-                          mode=_mode(body), clips=_clips(body))
+                          clips=_clips(body))
         elif kind == "layout":
             v = (body.get("video") or "").strip()
             if not v:
@@ -257,22 +255,16 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
             j = jm.submit("watch", f"LIVE: {v[:70]}", video=v, minutes=body.get("minutes", 10),
                           streamer=body.get("streamer", ""), credit_url=body.get("credit_url", ""),
                           facecam=body.get("facecam", ""), crop=body.get("crop"),
-                          mode=_mode(body), clips=_clips(body))
+                          clips=_clips(body))
         elif kind == "rejudge":
             j = jm.submit("rejudge", f"Re-judge: video {body['video_id']}", video_id=int(body["video_id"]))
         elif kind == "build":
             j = jm.submit("build", f"Rebuild: video {body['video_id']}", video_id=int(body["video_id"]))
         elif kind == "upload":
-            j = jm.submit("upload", "YouTube upload" + (f" ({channels.LABELS[body['channel']]})" if body.get("channel") in channels.KEYS else "")
-                          + (" NOW" if body.get("public_now") else "") + (" (dry run)" if body.get("dry_run") else ""),
-                          dry_run=bool(body.get("dry_run")), limit=body.get("limit"),
-                          channel=(body.get("channel") if body.get("channel") in channels.KEYS else None),
-                          public_now=bool(body.get("public_now")))
+            j = jm.submit("upload", "YouTube upload" + (" NOW" if body.get("public_now") else "") + (" (dry run)" if body.get("dry_run") else ""),
+                          dry_run=bool(body.get("dry_run")), limit=body.get("limit"), public_now=bool(body.get("public_now")))
         elif kind == "youtube_login":
-            key = body.get("channel") or "voiceover"
-            if key not in channels.KEYS:
-                raise HTTPException(400, "unknown channel")
-            j = jm.submit("youtube_login", f"YouTube login: {channels.LABELS[key]}", channel=key)
+            j = jm.submit("youtube_login", "YouTube login")
         else:
             raise HTTPException(400, f"unknown job kind {kind!r}")
         return {"id": j.id}
@@ -611,10 +603,6 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         r = learn.load(st) or learn.build(st, c)
         r["analytics_on"] = bool(c.get("upload.analytics", False))
         r["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(r.get("playbook"))
-        s = learn.load(st, "streamer") or learn.build(st, c, "streamer")
-        s["analytics_on"] = r["analytics_on"]
-        s["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(s.get("playbook"))
-        r["streamer"] = s
         return r
 
     @app.post("/api/learn/refresh")
@@ -771,15 +759,12 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         kind = body.get("kind") or "auto"
         if kind == "auto":
             kind = "live" if any(w in url.lower() for w in ("/live", "live_stream")) else "auto"   # the assistant asks YouTube
-        mode = body.get("mode") or "voiceover"
-        if mode not in ("voiceover", "streamer"):
-            raise HTTPException(400, "Choose the clip type: voiceover or streamer")
         try:
             clips = max(0, int(body.get("clips") or 0))
         except (TypeError, ValueError):
             raise HTTPException(400, "How many clips? Enter a number")
         opts = {"minutes": body.get("minutes", 5), "facecam": body.get("facecam", ""), "crop": body.get("crop"),
-                "mode": mode, "clips": clips}
+                "clips": clips}
         sid = store().add_agent_source(url, kind, body.get("name", ""), body.get("streamer", ""),
                                        body.get("credit_url", ""), opts)
         assistant.wake()
@@ -955,10 +940,7 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
     @app.post("/api/youtube/logout")
     def yt_logout(body: dict = Body(default={})):
         c = cfg()
-        key = body.get("channel") or "voiceover"
-        if key not in channels.KEYS:
-            raise HTTPException(400, "unknown channel")
-        channels.token_path(c, key).unlink(missing_ok=True)
+        (c.root / c.get("upload.token", "token.json")).unlink(missing_ok=True)
         return {"ok": True}
 
     @app.exception_handler(Exception)

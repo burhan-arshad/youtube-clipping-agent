@@ -37,7 +37,7 @@ def ingest(src: Source, workdir: Path, cfg=None, stop=None) -> Path:
         return p
     if not src.url:
         raise ValueError(f"source '{src.id}' has neither path nor url")
-    dest_dir = workdir / "downloads" / src.id.removesuffix("-streamer")     # both kinds of clips share one download
+    dest_dir = workdir / "downloads" / src.id
     dest_dir.mkdir(parents=True, exist_ok=True)
     existing = [f for f in dest_dir.glob("video.*") if f.suffix not in (".part", ".ytdl")]
     if existing:

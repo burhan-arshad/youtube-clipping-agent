@@ -24,9 +24,8 @@ def test_parse_links():
     assert r[0]["streamer"] == "Duck" and r[0]["facecam"] == "top-right"
 
 
-def test_source_ids_differ_but_download_shared():
-    a, b = source_for("https://a.com/1", mode="voiceover"), source_for("https://a.com/1", mode="streamer")
-    assert a.id != b.id and b.id.removesuffix("-streamer") == a.id
+def test_source_id_stable():
+    assert source_for("https://a.com/1").id == source_for("https://a.com/1").id
 
 
 def test_daily_start_finish_and_reminders(tmp_path):
@@ -34,9 +33,9 @@ def test_daily_start_finish_and_reminders(tmp_path):
     n = N()
     autopilot.tick(cfg, st, n, is_live_fn=lambda u, c: False)
     q = st.agent_sources()
-    assert len(q) == 2 and {json.loads(s["options"])["mode"] for s in q} == {"voiceover", "streamer"}
+    assert len(q) == 1 and json.loads(q[0]["options"])["clips"] == 5
     autopilot.tick(cfg, st, n, is_live_fn=lambda u, c: False)          # same day: no second link
-    assert len(st.agent_sources()) == 2
+    assert len(st.agent_sources()) == 1
     for s in q:
         st.update_agent_source(s["id"], status="done")
     autopilot.tick(cfg, st, n, is_live_fn=lambda u, c: False)
@@ -65,7 +64,7 @@ def test_success_summary_and_next_day_not_before_run_at(tmp_path):
     autopilot.tick(cfg, st, n, is_live_fn=lambda u, c: False)
     for s in st.agent_sources():
         st.update_agent_source(s["id"], status="done")
-    sid = source_for("https://a.com/1", mode="voiceover").id
+    sid = source_for("https://a.com/1").id
     vid = st.add_video(sid, "x.mp4", {"duration": 100.0})
     for _ in range(3):
         c = st.add_clip(vid, 0.0, 30.0, 1.0)

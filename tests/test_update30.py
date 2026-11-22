@@ -7,30 +7,8 @@ import time
 import zipfile
 from pathlib import Path
 
-from featureclip import backup, bounds, cleanup, heartbeat, learn, supervisor
+from featureclip import backup, cleanup, heartbeat, learn, supervisor
 from featureclip.store import Store
-
-
-# ---------------------------------------------------------------- bounds
-W = [(10.0, 10.4, "no"), (10.5, 10.9, "way"), (11.0, 11.4, "that"), (11.5, 12.0, "happened."),
-     (14.0, 14.3, "bro"), (14.4, 14.9, "look"), (15.0, 15.6, "at"), (15.7, 16.3, "this!"), (20.0, 20.5, "later")]
-
-
-def test_bounds_moves_start_back_and_end_forward():
-    s, e, info = bounds.refine(W, 10.8, 15.2, video_len=100)
-    assert abs(s - (10.0 - 0.35)) < 0.01                 # back to the start of "no way that happened."
-    assert abs(e - (16.3 + 0.5)) < 0.01                  # forward to the end of "bro look at this!"
-    assert info["start_moved"] > 0 and info["end_moved"] > 0
-
-
-def test_bounds_keeps_pauses_and_limits():
-    s, e, _ = bounds.refine(W, 12.5, 13.5, video_len=100)             # both in silence: unchanged
-    assert (s, e) == (12.5, 13.5)
-    s, e, _ = bounds.refine(W, 10.8, 15.2, video_len=16.5)            # never past the end of the video
-    assert e <= 16.5
-    s, e, _ = bounds.refine(W, 10.8, 15.2, video_len=100, max_len=5.0)
-    assert e - s <= 5.6
-    assert bounds.refine([], 1, 5) == (1, 5, {"start_moved": 0.0, "end_moved": 0.0})
 
 
 # ---------------------------------------------------------------- watchdog
@@ -126,13 +104,10 @@ def test_disk_critical(cfg, tmp_path):
     assert not cleanup.disk_critical(cfg, tmp_path)
 
 
-# ---------------------------------------------------------------- per channel playbook
-def test_playbook_is_per_channel(cfg):
+# ---------------------------------------------------------------- playbook
+def test_playbook_single(cfg):
     st = Store(cfg.path("paths.db"))
-    rep_v = learn.refresh(st, cfg)
-    assert rep_v["channel"] == "voiceover"
-    assert learn.load(st, "streamer")["channel"] == "streamer" and learn.load(st, "voiceover")["channel"] == "voiceover"
-    st.kv_set("playbook:streamer", json.dumps({"playbook": "STREAMER ONLY"}))
-    assert learn.playbook_text(st, cfg, "streamer") == "STREAMER ONLY"
-    assert "STREAMER" not in learn.playbook_text(st, cfg, "voiceover")
+    rep = learn.refresh(st, cfg)
+    assert isinstance(rep, dict) and isinstance(learn.load(st), dict)
+    assert isinstance(learn.playbook_text(st, cfg), str)
     st.close()

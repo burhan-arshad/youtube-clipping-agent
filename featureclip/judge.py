@@ -189,7 +189,6 @@ def normalize(raw: dict, window_len: float, clip_min: float, clip_max: float) ->
         "what_happens": str(raw.get("what_happens", "")).strip()[:600],
         "confidence": max(0.0, min(100.0, num(raw.get("confidence")))),
         "interest": max(0.0, min(100.0, num(raw.get("interest")))),
-        "reaction": (max(0.0, min(100.0, num(raw.get("reaction")))) if raw.get("reaction") is not None else None),
         "visible_evidence": [str(x).strip()[:160] for x in (raw.get("visible_evidence") or [])
                              if isinstance(x, (str, int, float)) and str(x).strip()][:4],
         "real_person_or_overlay_visible": bool(raw.get("real_person_or_overlay_visible")) is True,
@@ -224,17 +223,10 @@ def decide(j: dict, cfg) -> tuple[bool, str]:
         return False, f"rejected category: {j['category']}"
     if not j["feature_name"] or not j["what_happens"]:
         return False, "missing feature description"
-    if j.get("real_person_or_overlay_visible") and cfg.get("layout.mode") != "streamer":
+    if j.get("real_person_or_overlay_visible"):
         return False, "streamer / webcam / chat / overlay visible in the picture"
     if cfg.get("judge.require_evidence", True) and len(j.get("visible_evidence", [])) < 2:
         return False, "no concrete visible evidence"
-    if cfg.get("layout.mode") == "streamer":
-        # reaction channel: only strong laughing / screaming / shocked moments, whatever the game feature is
-        if j["category"] not in ("funny_moment", "chaotic_action", "epic_stunt", "dramatic_moment"):
-            return False, f"not a reaction moment ({j['category']})"
-        need = float(cfg.get("streamer.min_reaction", 45))
-        if j.get("reaction") is None or j["reaction"] < need:
-            return False, f"the streamer's reaction is too weak ({j.get('reaction')}, need {need:.0f})"
     min_conf, min_int = thresholds(cfg)
     if j["confidence"] < min_conf:
         return False, f"confidence {j['confidence']:.0f} too low (need {min_conf:.0f})"
@@ -244,22 +236,15 @@ def decide(j: dict, cfg) -> tuple[bool, str]:
 
 
 def judge_window(llm, cfg, video: str, start: float, end: float, transcript: str,
-                 signal_score: float, tmp: Path, crop=None, cam=None) -> dict:
+                 signal_score: float, tmp: Path, crop=None) -> dict:
     window_len = end - start
     images, times = [], []
-    n_cam = 0
     if cfg.get("llm.vision", True):
         images, times = grab_keyframes(video, start, end, int(cfg.get("llm.frames", 4)),
                                        int(cfg.get("llm.frame_width", 640)), tmp, crop)
-        if cfg.get("layout.mode") == "streamer" and cam:          # close-ups of the face: the expression is the evidence
-            try:
-                closeups, _ = grab_keyframes(video, start, end, 2, 480, tmp / "cam", cam)
-                images, n_cam = images + closeups, len(closeups)
-            except Exception:
-                n_cam = 0
     else:
         times = [window_len / 2]
-    mo = motion_level(images[:len(images) - n_cam]) if images else None
+    mo = motion_level(images) if images else None
     if mo is not None and mo < float(cfg.get("judge.min_motion", 1.0)):
         j = normalize({}, window_len, float(cfg.get("video.clip_min")), float(cfg.get("video.clip_max")))
         j.update(accept=False, decision_reason="picture is almost frozen (menu / loading / standing still), skipped without AI",
@@ -270,26 +255,8 @@ def judge_window(llm, cfg, video: str, start: float, end: float, transcript: str
         signal_score, float(cfg.get("video.clip_min")), float(cfg.get("video.clip_max")),
         hints=list(cfg.get("game.hints", []) or []),
     )
-    if cfg.get("layout.mode") == "streamer":
-        prompt += ("\n\nSTREAMER-CLIP MODE (overrides the hint above): this channel publishes REACTION clips. The finished Short "
-                   "keeps the streamer's own voice, with the webcam above the gameplay. What we want: something funny, chaotic, "
-                   "shocking or fails in the game WHILE the streamer reacts: laughing, screaming, shocked, panicking, rage or "
-                   "disbelief. In this mode feature_shown=true means: such a reaction moment is present in this window; "
-                   "feature_name = a short name for the moment (e.g. 'streamer screams as the car flips'), what_happens = what "
-                   "happens in the game and how the streamer reacts. Use category funny_moment, chaotic_action, epic_stunt or "
-                   "dramatic_moment. Judge the reaction from ALL evidence together: the transcript (laughter, exclamations, "
-                   "swearing, 'oh my god', shouting, sudden loudness), the automatic excitement score (high = loud/chaotic audio), "
-                   + (f"and the LAST {n_cam} images, which are close-ups of the streamer's face (wide eyes, open mouth, laughing). "
-                      if n_cam else "and the streamer's face in the frames if the webcam is visible. ")
-                   + "A calm window with ordinary talking, driving, menus, loading or chat reading is feature_shown=false. "
-                   "Start the clip 1-2 seconds before the trigger so the viewer sees what causes the reaction, and end after the "
-                   "reaction fades, without cutting a sentence in half. "
-                   "Add ONE more key to the JSON: \"reaction\": 0-100 = how strong and entertaining the streamer's reaction is "
-                   "(0 = calm, 40 = amused / surprised, 70 = loud laughter or a scream, 90+ = total shock or explosive laughing).")
     raw = llm.json(prompt, system=SYSTEM, images=images or None)
     j = normalize(raw, window_len, float(cfg.get("video.clip_min")), float(cfg.get("video.clip_max")))
-    if cfg.get("layout.mode") == "streamer" and j.get("reaction") is not None:
-        j["interest"] = round(0.65 * j["interest"] + 0.35 * j["reaction"], 1)     # funny speech lifts a clip, dead air sinks it
     ok, why = decide(j, cfg)
     j["accept"], j["decision_reason"] = ok, why
     if mo is not None:

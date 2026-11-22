@@ -334,7 +334,8 @@ def cmd_daily(args) -> int:
     return 0
 
 
-TIDY = ["start_ui.bat", "layout.png", "sources.example.yaml", "docs/outreach_message.md", "streamer_channel_kit.zip",
+TIDY = ["start_ui.bat", "layout.png", "sources.example.yaml", "docs/outreach_message.md", "streamer_channel_kit.zip", "featureclip/bounds.py", "featureclip/syncfix.py", "featureclip/channels.py",
+        "tests/test_streamer.py", "tests/test_update34.py", "token_streamer.json",
         ".pytest_cache"]
 
 
@@ -353,6 +354,18 @@ def cmd_tidy(args) -> int:
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
     if not args.yes:
         print("\nNothing was deleted. Run again with --yes to delete these.")
+    return 0
+
+
+def cmd_remove_streamer(args) -> int:
+    """Delete the leftovers of the discontinued streamer channel (dry run unless --yes). Voice-over clips are never touched."""
+    from . import legacy
+    cfg, store, _, _ = _setup(args)
+    r = legacy.remove(cfg, store, apply=args.yes)
+    print(f"streamer clips: {r['clips']} ({r['files']} files, {r['mb']} MB), queue entries: {r['queue']}, old settings: {r['kv']}")
+    if r["on_youtube"]:
+        print(f"{r['on_youtube']} of them were uploaded to the streamer channel (they stay on YouTube; delete them in YouTube Studio).")
+    print("Done. A backup was made first." if r["applied"] else "Nothing was deleted. Run again with --yes to delete.")
     return 0
 
 
@@ -414,6 +427,9 @@ def main(argv: list[str] | None = None) -> int:
     ty = sub.add_parser("tidy", help="list unneeded files (add --yes to delete them)")
     ty.add_argument("--yes", action="store_true")
     ty.set_defaults(fn=cmd_tidy)
+    rm = sub.add_parser("remove-streamer", help="delete old streamer clips/settings (add --yes to really delete)")
+    rm.add_argument("--yes", action="store_true")
+    rm.set_defaults(fn=cmd_remove_streamer)
     rs = sub.add_parser("restore", help="put a backup zip back (close the program first)")
     rs.add_argument("file")
     rs.set_defaults(fn=cmd_restore)
