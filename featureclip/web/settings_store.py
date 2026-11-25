@@ -89,6 +89,10 @@ FIELDS: list[dict] = [
     {"group": "Download (YouTube 429 / bot error)", "key": "ingest.cookies_from_browser",
      "label": "Or read cookies from a browser", "type": "select", "options": ["", "chrome", "edge", "firefox"],
      "help": "The browser must be fully closed. The cookies.txt method is more reliable"},
+    {"group": "Download (YouTube 429 / bot error)", "key": "ingest.part_minutes", "label": "Download long videos in parts of (minutes)",
+     "type": "number", "help": "A 5-hour stream is downloaded 30 minutes at a time: clips are made, the part is deleted, then the next part comes. 0 = download everything at once"},
+    {"group": "Download (YouTube 429 / bot error)", "key": "ingest.max_minutes", "label": "Use at most this many minutes of one video",
+     "type": "number", "help": "0 = no limit (it stops anyway as soon as the wanted number of clips is made)"},
     # ---- upload
     {"group": "YouTube upload", "key": "upload.privacy", "label": "Upload privacy", "type": "select",
      "options": ["private", "unlisted", "public"], "help": "Keep it private at first"},

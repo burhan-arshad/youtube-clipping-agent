@@ -1,6 +1,6 @@
 @echo off
-REM featureclip ko Windows login par khud shuru karne ke liye (ek baar chalao).
+REM featureclip ko Windows login par chupke (bina window ke) khud shuru karne ke liye. Ek baar chalao.
 cd /d "%~dp0"
-schtasks /Create /TN "featureclip" /TR "\"%~dp0start_ui_hidden.bat\"" /SC ONLOGON /DELAY 0000:30 /F
-if errorlevel 1 (echo Kuch masla aaya. Is file par Right click - Run as administrator try karo.) else (echo Theek hai! Ab PC restart ke baad featureclip khud chalega aur Assistant wapis shuru ho jayega.)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_autostart.ps1"
+if errorlevel 1 (echo Kuch masla aaya. Is file par Right click - Run as administrator try karo.) else (echo Theek hai! Ab laptop on karke login karte hi featureclip khud chalega.)
 pause

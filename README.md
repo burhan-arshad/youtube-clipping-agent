@@ -84,8 +84,8 @@ Every stage is resumable: signals, transcripts and finished clips are cached, so
 - QA gates on the final mp4 (a clip that fails is never uploaded).
 
 **Publishing**
-- Two YouTube channels with separate logins, publish slots, daily caps and limit handling.
-- Schedule on the next free slot, or **upload now** (public immediately), per channel or for everything.
+- One YouTube channel: login, publish slots, daily cap and limit handling.
+- Schedule on the next free slot, or **upload now** (public immediately), for all approved clips.
 - Publishing slots are written in Pakistan time (PKT) and converted for YouTube; launch mode for stream days.
 - Title/description/tags/thumbnail written by the AI, with credit to the streamer in the description.
 
@@ -97,8 +97,9 @@ Every stage is resumable: signals, transcripts and finished clips are cached, so
 - Safe mode: one switch that stops every upload and new job.
 
 **Learning**
-- Reads views/likes (and optionally watch time) from YouTube, keeps a separate playbook per channel, and feeds the
-  lessons into the script/title prompts. Suggests (or applies) better publish times.
+- Reads views/likes (and optionally watch time) from YouTube, keeps a channel playbook, and feeds the
+  lessons into the script/title prompts. Prefers the clip categories and hook/title styles that got more views, and
+  suggests (or applies) better publish times. Analytics can be downloaded as CSV (Analytics tab).
 
 **Operations**
 - Web UI with Settings in one place, Memory (disk) tab, live activity log with Stop buttons, analytics, daily backups.
@@ -129,7 +130,7 @@ Linux/macOS also work from the command line (same steps with your shell's venv a
 python -m featureclip ui          :: opens http://127.0.0.1:8765
 ```
 1. **Settings → AI (Gemini):** paste your key.
-2. **YouTube tab:** choose `client_secret.json` (see below), then log in once per channel.
+2. **YouTube tab:** choose `client_secret.json` (see below), then log in once.
 3. **New video:** paste a video link, enter how many clips, press **Make clips**.
 4. **Clips:** review the result. Or switch the **Assistant** on and let it approve and schedule.
 
@@ -161,8 +162,10 @@ Turn on **Settings → Autopilot → enabled** and switch the **Assistant** on. 
 
 Live-stream links are skipped (record those from the Assistant/New video tabs). Training from YouTube results continues in the background.
 
-**Starting by itself after a reboot:** run `install_autostart.bat` once. It registers a Windows task that starts
-`start_ui_hidden.bat` (the watchdog) at login. It starts when you log in, not before, and the laptop must not be asleep.
+**Starting by itself after a reboot:** run `install_autostart.bat` once. It registers a Windows task that starts the
+program **hidden** (`start_background.vbs` -> `start_ui_hidden.bat`, the watchdog) at every login, also on battery. It starts
+when you log in, not before. The laptop must be on and awake: in sleep nothing runs, after waking it continues by itself.
+Schedule a power plan with sleep set to *Never* if you want the daily run at its exact time. Logs: `data/watchdog.log`.
 
 ## The web UI (tabs)
 
@@ -171,9 +174,9 @@ Live-stream links are skipped (record those from the Assistant/New video tabs). 
 | 🤖 **Assistant** | animated robot showing what the assistant is doing right now, steps, live log and decisions, on/off, Safe mode, Launch mode, Autopilot status and link box, the link queue (with Stop) |
 | 🎬 **New video** | make clips from one video or a live stream, layout preview and crop editor |
 | 🎞 **Clips** | every clip with video, title, description, thumbnail, AI review; approve, reject, rebuild, regenerate text |
-| ▶️ **YouTube** | per channel: login, **Upload now** and **Schedule on available slots**; all-channels buttons; slots and scheduled videos; one-time Google setup |
+| ▶️ **YouTube** | login, **Upload now** and **Schedule on available slots**; slots and scheduled videos; one-time Google setup |
 | 📜 **Activity / Log** | every job with its live log, ⏹ Stop per job, **Stop everything** |
-| 📈 **Analytics** | results by category and publish time, learning playbooks per channel, Gemini usage, free quota |
+| 📈 **Analytics** | results by category and publish time, learning playbook, CSV downloads, Gemini usage, free quota |
 | 🧠 **Memory** | disk usage; delete **clip files** or **work files** (the data stays); smart cleanup; backups |
 | ⚙️ **Settings** | every setting in one place, in sections, one Save button; tools: self-test, Gemini test, system check, voice lab |
 
@@ -200,7 +203,9 @@ Secrets live in `.env` and never in `config.yaml`. Defaults and comments: `featu
 | `schedule.slots` | `21:00, 01:00, 05:00` | publish times, **Pakistan time** |
 | `schedule.max_ahead_days` | `3` | how far ahead slots are filled |
 | `upload.privacy` | `private` | `private` / `unlisted` / `public` (start with private) |
-| `upload.max_per_day` | `3` | daily upload cap per channel when not scheduling |
+| `upload.max_per_day` | `3` | daily upload cap when not scheduling |
+| `ingest.part_minutes` | `30` | long online videos are downloaded this many minutes at a time; each part is deleted after its clips are made (`0` = whole video) |
+| `ingest.max_minutes` | `0` | use at most this many minutes of one video (`0` = no limit) |
 | `layout.mode` | `fill` | `fill` or `hybrid` |
 | `cleanup.max_work_gb` | `20` | hard limit of the work folder |
 | `backup.every_hours`, `backup.keep` | `24`, `7` | automatic backups |
@@ -231,7 +236,7 @@ python -m featureclip <command> [--root PATH] [--config FILE]
 | `tidy [--yes]` | list (or delete) files the program does not need; `python tidy.py` works without installing anything |
 | `python -m featureclip.supervisor --root .` | run the UI + assistant under the watchdog |
 
-Windows helpers: `start_ui_hidden.bat` / `start_watchdog.bat` (watchdog), `start_live.bat`, `install_autostart.bat`,
+Windows helpers: `start_background.vbs` (hidden start), `start_ui_hidden.bat` / `start_watchdog.bat` (watchdog), `start_live.bat`, `install_autostart.bat`,
 `remove_autostart.bat`, `tidy.bat`.
 
 ## Reliability and safety
@@ -264,6 +269,7 @@ Restore: close the program, then `python -m featureclip restore data\backups\<fi
 | `ModuleNotFoundError: yaml` (or any module) | you are not in the environment where `pip install -r requirements.txt` was run; activate it first |
 | Gemini 429 / quota | the tool switches models by itself; see Analytics → Free quota. Quota resets at midnight Pacific time |
 | YouTube keeps uploads private | your Google project is not audited yet; publish from YouTube Studio (the assistant notifies you) |
+| Disk too small for a long stream | Settings → Download → *Download long videos in parts of* (default 30 min): one part on disk at a time |
 | yt-dlp bot / 429 errors | put a `cookies.txt` in the project folder or set the browser cookie option in Settings → Download |
 | UI shows old settings | press **Save all settings**; settings are only written on Save |
 | Disk full | Memory tab → delete work files / clip files |
@@ -301,7 +307,7 @@ config.example.yaml, .env.example, links.txt.example
 
 - Tested on synthetic streams and mocked services; behaviour on very long real streams, real YouTube logins and a real
   Windows hang is only as good as the first real runs. Read the first days' logs.
-- Autopilot handles **recorded** videos; live links are skipped.
+- Autopilot handles **recorded** videos (finished streams are downloaded in parts); running live links are skipped.
 - Gemini's free tier has small daily limits for the smarter models; the tool uses the high-limit Flash-Lite models first.
 - Facecam/gameplay detection can be wrong for unusual layouts; use the layout preview and the crop fields.
 - Twitch chat signals are not supported.

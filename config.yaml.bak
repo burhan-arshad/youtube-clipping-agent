@@ -96,7 +96,7 @@ game:
   - elements
 layout:
   facecam: auto
-  mode: streamer
+  mode: hybrid
   ai: true
 llm:
   provider: gemini
@@ -108,10 +108,10 @@ audio:
   music: true
   music_db: -22
 review:
-  auto_approve: false
+  auto_approve: true
 upload:
   privacy: private
-  max_per_day: 3
+  max_per_day: 5
   manage_videos: true
   analytics: true
   title_suffix: '#Shorts'
@@ -120,10 +120,10 @@ upload:
 assistant:
   enabled: true
   mode: ask
-  review_strictness: strict
+  review_strictness: normal
   max_rebuilds: 1
   piece_minutes: 10
-  stock_target: 15
+  stock_target: 0
   weekly_report: true
   buffer_days: 2
 learn:
@@ -131,9 +131,9 @@ learn:
 schedule:
   enabled: true
   slots:
-  - '21:00'
   - 01:00
-  - 05:00
+  - 07:00
+  - '21:00'
   max_ahead_days: 20
   autotune: auto
   pool:
@@ -180,6 +180,8 @@ narration:
   punch_up: true
 ingest:
   cookies_file: Y:\featureclip\cookies.txt
+  part_minutes: 30
+  max_minutes: 0
 streamer:
   top_ratio: 0.36
   captions: true

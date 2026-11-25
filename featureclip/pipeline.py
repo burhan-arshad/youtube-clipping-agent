@@ -415,10 +415,71 @@ class Pipeline:
 
     # ------------------------------------------------------------ whole run
     def run(self, source_id: str, path=None) -> int:
+        if path is None and self._chunked(source_id):
+            return self.run_parts(source_id)
         vid = self.scan(source_id, path)
         self.judge(vid)
         self.build(vid)
         return vid
+
+    # ------------------------------------------------------------ long online videos: part by part
+    def _chunked(self, source_id: str) -> bool:
+        src = self.sources.get(source_id)
+        return bool(src and src.url and not src.path and float(self.cfg.get("ingest.part_minutes", 30) or 0) > 0)
+
+    def run_parts(self, source_id: str) -> int:
+        """Download ~part_minutes at a time -> make clips from it -> delete that part -> next part, until the wanted number of
+        clips exists, ingest.max_minutes were used, or the video ends. Disk use stays at one part."""
+        import shutil
+        from .ingest import ingest_part, remote_duration
+        src = resolve_source(source_id, self.sources)
+        part = float(self.cfg.get("ingest.part_minutes", 30)) * 60
+        limit = float(self.cfg.get("ingest.max_minutes", 0) or 0) * 60
+        total = remote_duration(src.url, self.cfg)
+        if total is None:
+            log("could not read the video length: downloading it in one piece")
+            vid = self.scan(src.id)
+            self.judge(vid)
+            self.build(vid)
+            return vid
+        if limit:
+            total = min(total, limit)
+        if total <= part * 1.3:                                   # short video: normal one-piece download
+            vid = self.scan(src.id)
+            self.judge(vid)
+            self.build(vid)
+            return vid
+        want = int((src.extra or {}).get("clips") or 0)
+        key = f"parts_done:{src.id}"
+        k = int(self.store.kv_get(key, "0") or 0)
+        n_parts = int(-(-total // part))
+        log(f"long video ({total / 60:.0f} min): {n_parts} parts of {part / 60:.0f} min, one at a time (each part is deleted after use)")
+        last = 0
+        while k < n_parts:
+            if self.stop_event is not None and self.stop_event.is_set():
+                raise RuntimeError("stopped by you")
+            a, b = k * part, min((k + 1) * part, total)
+            log(f"--- part {k + 1}/{n_parts}: minutes {a / 60:.0f}-{b / 60:.0f} ---")
+            path = ingest_part(src, self.work, self.cfg, a, b, k, self.stop_event)
+            last = self.scan(src.id, path)
+            self.judge(last)
+            self.build(last)
+            left = self.store.clips(last, "candidate") + self.store.clips(last, "judged")
+            if left:                                              # AI quota ended: keep the part, the assistant resumes it later
+                log("part not finished (AI limit?): it is kept and finished later; next parts wait")
+                return last
+            shutil.rmtree(path.parent, ignore_errors=True)
+            log(f"part {k + 1} done and deleted from disk")
+            k += 1
+            self.store.kv_set(key, str(k))
+            made = sum(1 for c in self.store.clips() if c["status"] in BUILT_STATES
+                       and self.store.video(c["video_id"])["source_id"] == src.id
+                       and (c["created"] or 0) >= float((src.extra or {}).get("since", 0) or 0))
+            if want and made >= want:
+                log(f"wanted {want} clips: done ({made} made)")
+                break
+        self.store.kv_set(key, "0")
+        return last
 
     # ------------------------------------------------------------ review + upload
     def approve(self, ids: list[int]) -> None:

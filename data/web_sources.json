@@ -218,5 +218,57 @@
    "clips": 50,
    "since": 1795287729.865095
   }
+ },
+ "web-11f52ed4": {
+  "id": "web-11f52ed4",
+  "streamer": "Mr Jay Plays",
+  "url": "https://www.youtube.com/watch?v=AwH8ZpGo69Y",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@MrJayPlays",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "clips": 15,
+   "since": 1795441396.6293466
+  }
+ },
+ "web-bd121015": {
+  "id": "web-bd121015",
+  "streamer": "Mr Jay Plays",
+  "url": "https://www.youtube.com/watch?v=hKEeEAeotAQ",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@MrJayPlays",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "clips": 15,
+   "since": 1795441464.5575483
+  }
+ },
+ "web-7f21d755": {
+  "id": "web-7f21d755",
+  "streamer": "Ducky Bhai",
+  "url": "https://www.youtube.com/watch?v=vs0CDuVnDOA",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@DuckyReloaded1",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "clips": 25,
+   "since": 1795591274.6658692
+  }
+ },
+ "web-58e3a5db": {
+  "id": "web-58e3a5db",
+  "streamer": "Nomi OP",
+  "url": "https://www.youtube.com/watch?v=x-Ew5CHsnC4",
+  "path": "",
+  "credit_url": "https://www.youtube.com/@NomiOPyt",
+  "facecam": "",
+  "crop": null,
+  "extra": {
+   "clips": 10,
+   "since": 1795595906.3514075
+  }
  }
 }

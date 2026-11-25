@@ -83,6 +83,10 @@ DEFAULTS: dict[str, Any] = {
         "facecam": "auto",          # auto | top-left | top-right | bottom-left | bottom-right | none
         "facecam_size": [0.27, 0.38],   # width, height of the corner area as a fraction of the frame
     },
+    "ingest": {
+        "part_minutes": 30,     # long online videos are downloaded this many minutes at a time (0 = whole video at once)
+        "max_minutes": 0,       # never use more than this many minutes of one video (0 = no limit)
+    },
     "detect": {
         "sample_fps": 2,
         "window": 30.0,         # candidate window length in seconds

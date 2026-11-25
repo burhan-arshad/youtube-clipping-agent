@@ -26,7 +26,7 @@ from .jobs import JobManager, load_all_sources
 STATIC = Path(__file__).resolve().parent / "static"
 
 
-API_REV = 35          # bump when the UI needs a new endpoint; the page compares it with its own number
+API_REV = 36          # bump when the UI needs a new endpoint; the page compares it with its own number
 
 
 def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAPI:
@@ -604,6 +604,31 @@ def create_app(root: str | Path = ".", config_path: str | None = None) -> FastAP
         r["analytics_on"] = bool(c.get("upload.analytics", False))
         r["in_use"] = bool(c.get("learn.use_playbook", True)) and bool(r.get("playbook"))
         return r
+
+    @app.get("/api/analytics/export")
+    def analytics_export(kind: str = "clips"):
+        """CSV download: one row per published Short (kind=clips) or the learned features (kind=features)."""
+        import csv
+        import io
+        from fastapi.responses import Response
+        c = cfg()
+        st = store(c)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        if kind == "features":
+            rep = learn.load(st) or learn.build(st, c)
+            w.writerow(["feature", "value", "clips", "avg_score", "lift"])
+            for f in rep.get("features", []):
+                w.writerow([f["feature"], f["value"], f["n"], f["avg"], f["lift"]])
+        else:
+            w.writerow(["clip_id", "title", "category", "hook_style", "title_style", "publish_time_pkt", "age_hours",
+                        "views", "views_per_hour", "likes", "comments", "avg_view_percent", "quality_score"])
+            for r in sorted(insights.clip_rows(st, 0.0), key=lambda r: -r["views"]):
+                w.writerow([r["id"], r["title"], r["category"], r.get("hook_style"), r.get("title_style"), r["slot"],
+                            r["age_h"], r["views"], round(r["rate"], 2), r["likes"], r["comments"], r["avg_pct"], r["score"]])
+        name = f"featureclip_{kind}_{time.strftime('%Y-%m-%d')}.csv"
+        return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     @app.post("/api/learn/refresh")
     def learn_refresh():
